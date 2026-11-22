@@ -30,7 +30,6 @@ jobs:
         with:
           targets: aarch64-linux-android,armv7-linux-androideabi,i686-linux-android,x86_64-linux-android
 
-      # 关键修复：显式指定 packages，避开已被移除的 legacy 'tools' 包
       - name: Setup Android SDK
         uses: android-actions/setup-android@v3
         with:
@@ -49,27 +48,72 @@ jobs:
       - name: Init Tauri Android
         run: npx tauri android init
 
-      # 解码 Keystore 用于签名
       - name: Decode Keystore
         run: |
-          echo "${{ secrets.ANDROID_KEYSTORE_BASE64 }}" | base64 -d > src-tauri/gen/android/app/release.keystore
+          echo "${{ secrets.ANDROID_KEYSTORE_BASE64 }}" | base64 -d > $RUNNER_TEMP/release.keystore
 
-      # 写入签名配置
       - name: Create keystore.properties
         run: |
           cat > src-tauri/gen/android/keystore.properties <<EOF
-          storeFile=../app/release.keystore
-          storePassword=${{ secrets.ANDROID_KEYSTORE_PASSWORD }}
+          storeFile=$RUNNER_TEMP/release.keystore
           keyAlias=${{ secrets.ANDROID_KEY_ALIAS }}
-          keyPassword=${{ secrets.ANDROID_KEY_PASSWORD }}
+          password=${{ secrets.ANDROID_KEYSTORE_PASSWORD }}
           EOF
 
-      # 构建签名 APK（只构建 arm64 以减小体积、加快速度）
+      - name: Patch Gradle signing config
+        run: |
+          GRADLE=src-tauri/gen/android/app/build.gradle.kts
+          if ! grep -q "signingConfigs" "$GRADLE"; then
+            python3 - "$GRADLE" <<'PY'
+          import sys, re
+          p = sys.argv[1]
+          s = open(p).read()
+
+          # Add import
+          if "import java.io.FileInputStream" not in s:
+              s = "import java.io.FileInputStream\n" + s
+
+          signing = '''
+          signingConfigs {
+              create("release") {
+                  val keystorePropertiesFile = rootProject.file("keystore.properties")
+                  val keystoreProperties = java.util.Properties()
+                  if (keystorePropertiesFile.exists()) {
+                      keystoreProperties.load(java.io.FileInputStream(keystorePropertiesFile))
+                  }
+                  keyAlias = keystoreProperties["keyAlias"] as String
+                  keyPassword = keystoreProperties["password"] as String
+                  storeFile = file(keystoreProperties["storeFile"] as String)
+                  storePassword = keystoreProperties["password"] as String
+              }
+          }
+          '''
+
+          # Insert into android { block
+          s = s.replace('android {', 'android {\n' + signing, 1)
+
+          # Reference signing config in release build
+          s = re.sub(
+              r'(buildTypes\s*\{.*?getByName\("release"\)\s*\{)',
+              r'\1\n                signingConfig = signingConfigs.getByName("release")',
+              s,
+              count=1,
+              flags=re.S
+          )
+
+          open(p, 'w').write(s)
+          print("Patched build.gradle.kts")
+          PY
+          else
+            echo "signingConfigs already present, skipping"
+          fi
+
       - name: Build APK
-        run: npx tauri android build --apk --target aarch64
+        run: npx tauri android build --apk --target aarch64 --verbose
 
       - name: Upload APK
         uses: actions/upload-artifact@v4
         with:
           name: aqis-ocr-apk
           path: src-tauri/gen/android/app/build/outputs/apk/**/*.apk
+          if-no-files-found: error
