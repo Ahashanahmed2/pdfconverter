@@ -43,6 +43,8 @@ jobs:
       - name: Install dependencies
         run: |
           npm install
+          npm install -D @tauri-apps/cli@^2w
+          
 
       # ✅ Keystore ডিকোড (init-এর আগে)
       - name: Decode Keystore
