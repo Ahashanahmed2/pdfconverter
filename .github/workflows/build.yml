@@ -1,4 +1,4 @@
-name: Build Android APK
+name: Build and Sign Android APK
 
 on:
   push:
@@ -28,7 +28,7 @@ jobs:
       - name: Setup Rust
         uses: dtolnay/rust-toolchain@stable
         with:
-          targets: aarch64-linux-android,armv7-linux-androideabi,i686-linux-android,x86_64-linux-android
+          targets: aarch64-linux-android
 
       - name: Setup Android SDK
         uses: android-actions/setup-android@v3
@@ -48,72 +48,64 @@ jobs:
       - name: Init Tauri Android
         run: npx tauri android init
 
-      - name: Decode Keystore
+      # ============================================================
+      # ধাপ ১: UNSIGNED APK বিল্ড (কোনো keystore/Gradle signing নেই)
+      # ============================================================
+      - name: Build unsigned APK
+        run: npx tauri android build --apk --target aarch64
+
+      - name: Locate unsigned APK
+        id: find_apk
+        run: |
+          APK=$(find src-tauri/gen/android/app/build/outputs/apk -name "*release*.apk" | head -n1)
+          if [ -z "$APK" ]; then
+            echo "No APK found!"
+            find src-tauri/gen/android/app/build/outputs -type f
+            exit 1
+          fi
+          echo "Found: $APK"
+          echo "apk_path=$APK" >> $GITHUB_OUTPUT
+
+      # ============================================================
+      # ধাপ ২: apksigner দিয়ে সাইন
+      # ============================================================
+      - name: Decode keystore
         run: |
           echo "${{ secrets.ANDROID_KEYSTORE_BASE64 }}" | base64 -d > $RUNNER_TEMP/release.keystore
+          ls -la $RUNNER_TEMP/release.keystore
 
-      - name: Create keystore.properties
+      - name: Sign APK with apksigner
         run: |
-          cat > src-tauri/gen/android/keystore.properties <<EOF
-          storeFile=$RUNNER_TEMP/release.keystore
-          keyAlias=${{ secrets.ANDROID_KEY_ALIAS }}
-          password=${{ secrets.ANDROID_KEYSTORE_PASSWORD }}
-          EOF
+          APK="${{ steps.find_apk.outputs.apk_path }}"
+          SIGNED="$(dirname "$APK")/app-signed-release.apk"
 
-      - name: Patch Gradle signing config
-        run: |
-          GRADLE=src-tauri/gen/android/app/build.gradle.kts
-          if ! grep -q "signingConfigs" "$GRADLE"; then
-            python3 - "$GRADLE" <<'PY'
-          import sys, re
-          p = sys.argv[1]
-          s = open(p).read()
+          # apksigner path খুঁজুন (build-tools)
+          BUILD_TOOLS=$(ls -d $ANDROID_HOME/build-tools/* | sort -V | tail -n1)
+          APKSIGNER="$BUILD_TOOLS/apksigner"
+          echo "Using apksigner: $APKSIGNER"
 
-          # Add import
-          if "import java.io.FileInputStream" not in s:
-              s = "import java.io.FileInputStream\n" + s
+          # zipalign (সাইন করার আগে দরকার)
+          ZIPALIGN="$BUILD_TOOLS/zipalign"
+          ALIGNED="$RUNNER_TEMP/app-aligned.apk"
+          "$ZIPALIGN" -v -p 4 "$APK" "$ALIGNED" || true
 
-          signing = '''
-          signingConfigs {
-              create("release") {
-                  val keystorePropertiesFile = rootProject.file("keystore.properties")
-                  val keystoreProperties = java.util.Properties()
-                  if (keystorePropertiesFile.exists()) {
-                      keystoreProperties.load(java.io.FileInputStream(keystorePropertiesFile))
-                  }
-                  keyAlias = keystoreProperties["keyAlias"] as String
-                  keyPassword = keystoreProperties["password"] as String
-                  storeFile = file(keystoreProperties["storeFile"] as String)
-                  storePassword = keystoreProperties["password"] as String
-              }
-          }
-          '''
+          # sign
+          "$APKSIGNER" sign \
+            --ks "$RUNNER_TEMP/release.keystore" \
+            --ks-pass "pass:${{ secrets.ANDROID_KEYSTORE_PASSWORD }}" \
+            --key-pass "pass:${{ secrets.ANDROID_KEYSTORE_PASSWORD }}" \
+            --ks-key-alias "${{ secrets.ANDROID_KEY_ALIAS }}" \
+            --out "$SIGNED" \
+            "$ALIGNED"
 
-          # Insert into android { block
-          s = s.replace('android {', 'android {\n' + signing, 1)
+          # যাচাই
+          "$APKSIGNER" verify --print-certs "$SIGNED"
 
-          # Reference signing config in release build
-          s = re.sub(
-              r'(buildTypes\s*\{.*?getByName\("release"\)\s*\{)',
-              r'\1\n                signingConfig = signingConfigs.getByName("release")',
-              s,
-              count=1,
-              flags=re.S
-          )
+          echo "SIGNED_APK=$SIGNED" >> $GITHUB_ENV
 
-          open(p, 'w').write(s)
-          print("Patched build.gradle.kts")
-          PY
-          else
-            echo "signingConfigs already present, skipping"
-          fi
-
-      - name: Build APK
-        run: npx tauri android build --apk --target aarch64 --verbose
-
-      - name: Upload APK
+      - name: Upload signed APK
         uses: actions/upload-artifact@v4
         with:
-          name: aqis-ocr-apk
-          path: src-tauri/gen/android/app/build/outputs/apk/**/*.apk
+          name: aqis-ocr-signed-apk
+          path: ${{ env.SIGNED_APK }}
           if-no-files-found: error
