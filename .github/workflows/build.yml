@@ -2,7 +2,7 @@ name: Build and Sign Android APK
 
 on:
   push:
-    branches: [main]
+    branches: [main]  # আপনার branch: master (প্রথম workflow-এর মতো)
   workflow_dispatch:
 
 jobs:
@@ -16,8 +16,12 @@ jobs:
       - name: Setup Node
         uses: actions/setup-node@v4
         with:
-          node-version: 20
-          cache: 'npm'
+          node-version: '20'
+
+      - name: Setup Rust
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: aarch64-linux-android,armv7-linux-androideabi,i686-linux-android,x86_64-linux-android
 
       - name: Setup Java
         uses: actions/setup-java@v4
@@ -25,87 +29,78 @@ jobs:
           distribution: 'temurin'
           java-version: '17'
 
-      - name: Setup Rust
-        uses: dtolnay/rust-toolchain@stable
-        with:
-          targets: aarch64-linux-android
-
       - name: Setup Android SDK
-        uses: android-actions/setup-android@v3
+        uses: android-actions/setup-android@v4
         with:
-          packages: 'platform-tools'
+          cmdline-tools-version: 12266719
 
-      - name: Setup NDK
+      - name: Install NDK
         run: |
-          echo "y" | $ANDROID_HOME/cmdline-tools/latest/bin/sdkmanager --install "ndk;25.2.9519653"
-          echo "NDK_HOME=$ANDROID_HOME/ndk/25.2.9519653" >> $GITHUB_ENV
+          echo "y" | $ANDROID_HOME/cmdline-tools/latest/bin/sdkmanager --sdk_root=$ANDROID_HOME "ndk;26.1.10909125" "platforms;android-34" "build-tools;34.0.0"
+          echo "NDK_HOME=$ANDROID_HOME/ndk/26.1.10909125" >> $GITHUB_ENV
+          echo "ANDROID_NDK_HOME=$ANDROID_HOME/ndk/26.1.10909125" >> $GITHUB_ENV
 
       - name: Install dependencies
         run: |
           npm install
-          npm install -g @tauri-apps/cli@^2
 
-      - name: Init Tauri Android
-        run: npx tauri android init
-
-      # ============================================================
-      # ধাপ ১: UNSIGNED APK বিল্ড (কোনো keystore/Gradle signing নেই)
-      # ============================================================
-      - name: Build unsigned APK
-        run: npx tauri android build --apk --target aarch64
-
-      - name: Locate unsigned APK
-        id: find_apk
+      # ✅ Keystore ডিকোড (init-এর আগে)
+      - name: Decode Keystore
         run: |
-          APK=$(find src-tauri/gen/android/app/build/outputs/apk -name "*release*.apk" | head -n1)
-          if [ -z "$APK" ]; then
-            echo "No APK found!"
-            find src-tauri/gen/android/app/build/outputs -type f
+          echo "${{ secrets.ANDROID_KEY_BASE64 }}" | base64 --decode > ${{ github.workspace }}/my-release-key.jks
+          ls -la ${{ github.workspace }}/my-release-key.jks
+
+      - name: Init Android project
+        run: npx tauri android init --ci
+
+      # ============================================================
+      # ধাপ ১: Universal UNSIGNED APK বিল্ড
+      # ============================================================
+      - name: Build APK
+        run: npx tauri android build --apk
+
+      # ============================================================
+      # ধাপ ২: zipalign + apksigner দিয়ে সাইন
+      # ============================================================
+      - name: Sign APK
+        run: |
+          cd src-tauri/gen/android/app/build/outputs/apk/universal/release/
+
+          if [ -f "app-universal-release-unsigned.apk" ]; then
+            UNSIGNED_APK="app-universal-release-unsigned.apk"
+          elif [ -f "app-universal-release.apk" ]; then
+            UNSIGNED_APK="app-universal-release.apk"
+          else
+            echo "❌ কোনো unsigned APK পাওয়া যায়নি!"
+            ls -la
             exit 1
           fi
-          echo "Found: $APK"
-          echo "apk_path=$APK" >> $GITHUB_OUTPUT
+          echo "Using: $UNSIGNED_APK"
+
+          BUILD_TOOLS="$ANDROID_HOME/build-tools/34.0.0"
+
+          # zipalign (sign করার আগে বাধ্যতামূলক)
+          "$BUILD_TOOLS/zipalign" -v -p 4 "$UNSIGNED_APK" app-universal-release-aligned.apk
+
+          # apksigner দিয়ে সাইন
+          "$BUILD_TOOLS/apksigner" sign \
+            --ks ${{ github.workspace }}/my-release-key.jks \
+            --ks-pass pass:${{ secrets.ANDROID_STORE_PASSWORD }} \
+            --key-pass pass:${{ secrets.ANDROID_KEY_PASSWORD }} \
+            --ks-key-alias ${{ secrets.ANDROID_KEY_ALIAS }} \
+            --out app-universal-release-signed.apk \
+            app-universal-release-aligned.apk
+
+          # verify
+          echo "===== Signature Verify ====="
+          "$BUILD_TOOLS/apksigner" verify --print-certs app-universal-release-signed.apk
 
       # ============================================================
-      # ধাপ ২: apksigner দিয়ে সাইন
+      # ধাপ ৩: Signed APK আপলোড
       # ============================================================
-      - name: Decode keystore
-        run: |
-          echo "${{ secrets.ANDROID_KEYSTORE_BASE64 }}" | base64 -d > $RUNNER_TEMP/release.keystore
-          ls -la $RUNNER_TEMP/release.keystore
-
-      - name: Sign APK with apksigner
-        run: |
-          APK="${{ steps.find_apk.outputs.apk_path }}"
-          SIGNED="$(dirname "$APK")/app-signed-release.apk"
-
-          # apksigner path খুঁজুন (build-tools)
-          BUILD_TOOLS=$(ls -d $ANDROID_HOME/build-tools/* | sort -V | tail -n1)
-          APKSIGNER="$BUILD_TOOLS/apksigner"
-          echo "Using apksigner: $APKSIGNER"
-
-          # zipalign (সাইন করার আগে দরকার)
-          ZIPALIGN="$BUILD_TOOLS/zipalign"
-          ALIGNED="$RUNNER_TEMP/app-aligned.apk"
-          "$ZIPALIGN" -v -p 4 "$APK" "$ALIGNED" || true
-
-          # sign
-          "$APKSIGNER" sign \
-            --ks "$RUNNER_TEMP/release.keystore" \
-            --ks-pass "pass:${{ secrets.ANDROID_KEYSTORE_PASSWORD }}" \
-            --key-pass "pass:${{ secrets.ANDROID_KEYSTORE_PASSWORD }}" \
-            --ks-key-alias "${{ secrets.ANDROID_KEY_ALIAS }}" \
-            --out "$SIGNED" \
-            "$ALIGNED"
-
-          # যাচাই
-          "$APKSIGNER" verify --print-certs "$SIGNED"
-
-          echo "SIGNED_APK=$SIGNED" >> $GITHUB_ENV
-
       - name: Upload signed APK
         uses: actions/upload-artifact@v4
         with:
           name: aqis-ocr-signed-apk
-          path: ${{ env.SIGNED_APK }}
+          path: src-tauri/gen/android/app/build/outputs/apk/universal/release/app-universal-release-signed.apk
           if-no-files-found: error
