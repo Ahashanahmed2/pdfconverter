@@ -6,14 +6,17 @@
   "scripts": {
     "dev": "vite",
     "build": "vite build",
-    "preview": "vite preview"
+    "preview": "vite preview",
+    "tauri": "tauri"
   },
   "devDependencies": {
-    "vite": "^5.0.0"
+    "vite": "^5.0.0",
+    "@tauri-apps/cli": "^2"
   },
   "dependencies": {
     "@tauri-apps/api": "^2.0.0",
     "@tauri-apps/plugin-dialog": "^2.0.0",
+    "@tauri-apps/plugin-fs": "^2.0.0",
     "tesseract.js": "^5.0.0"
   }
 }
