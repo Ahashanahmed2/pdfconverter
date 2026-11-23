@@ -1,7 +1,6 @@
 import { invoke, convertFileSrc } from "@tauri-apps/api/core";
 import { open } from "@tauri-apps/plugin-dialog";
 import Tesseract from "tesseract.js";
-document.body.innerHTML = "<div style='padding:16px;font-family:sans-serif;'>JS Started...</div>";
 
 const app = document.querySelector("#app");
 
@@ -11,6 +10,7 @@ window.addEventListener("error", (e) => {
 window.addEventListener("unhandledrejection", (e) => {
   document.body.innerHTML = `<pre style="padding:16px;color:red;white-space:pre-wrap;">Promise Error: ${e.reason}</pre>`;
 });
+document.body.innerHTML = "<div style='padding:16px;font-family:sans-serif;'>JS Started...</div>";
 
 app.innerHTML = `
   <div style="font-family: system-ui, -apple-system, sans-serif; max-width: 600px; margin: 0 auto; padding: 20px;">
