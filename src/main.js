@@ -5,54 +5,44 @@ import Tesseract from "tesseract.js";
 const app = document.querySelector("#app");
 
 window.addEventListener("error", (e) => {
-  document.body.innerHTML = `<pre style="padding:16px;color:red;white-space:pre-wrap;">JS Error: ${e.message}</pre>`;
+  app.innerHTML = `<pre style="padding:16px;color:red;white-space:pre-wrap;">JS Error: ${e.message}</pre>`;
 });
 window.addEventListener("unhandledrejection", (e) => {
-  document.body.innerHTML = `<pre style="padding:16px;color:red;white-space:pre-wrap;">Promise Error: ${e.reason}</pre>`;
+  app.innerHTML = `<pre style="padding:16px;color:red;white-space:pre-wrap;">Promise Error: ${e.reason}</pre>`;
 });
-document.body.innerHTML = "<div style='padding:16px;font-family:sans-serif;'>JS Started...</div>";
 
 app.innerHTML = `
-  <div style="font-family: system-ui, -apple-system, sans-serif; max-width: 600px; margin: 0 auto; padding: 20px;">
-    <h1 style="font-size: 1.5rem; margin-bottom: 4px;">AQIS OCR Converter</h1>
-    <p style="color: #64748b; font-size: 0.9rem; margin-top: 0; margin-bottom: 20px;">
-      PDF ও ছবি থেকে টেক্সট বের করুন
-    </p>
+  <div style="font-family: system-ui, sans-serif; max-width: 600px; margin: 0 auto; padding: 20px;">
+    <h1 style="font-size: 1.5rem;">AQIS OCR Converter</h1>
+    <p style="color: #64748b; font-size: 0.9rem;">PDF ও ছবি থেকে টেক্সট বের করুন</p>
 
-    <div style="background: #ffffff; padding: 16px; border-radius: 12px; box-shadow: 0 1px 3px rgba(0,0,0,0.1); margin-bottom: 16px;">
-      <div style="display: flex; gap: 12px; flex-wrap: wrap; margin-bottom: 14px;">
-        <div style="flex: 1; min-width: 120px;">
-          <label style="display: block; font-size: 0.85rem; font-weight: 600; margin-bottom: 4px;">আউটপুট ফরম্যাট</label>
-          <select id="format" style="width: 100%; padding: 8px; border: 1px solid #cbd5e1; border-radius: 8px; font-size: 0.95rem;">
-            <option value="txt">TXT (.txt)</option>
-            <option value="md">Markdown (.md)</option>
-            <option value="json">JSON (.json)</option>
+    <div style="background:#fff; padding:16px; border-radius:12px; box-shadow:0 1px 3px rgba(0,0,0,.1); margin-bottom:16px;">
+      <div style="display:flex; gap:12px; margin-bottom:14px;">
+        <div style="flex:1;">
+          <label>আউটপুট ফরম্যাট</label>
+          <select id="format" style="width:100%; padding:8px;">
+            <option value="txt">TXT</option>
+            <option value="md">Markdown</option>
+            <option value="json">JSON</option>
           </select>
         </div>
-
-        <div style="flex: 1; min-width: 120px;">
-          <label style="display: block; font-size: 0.85rem; font-weight: 600; margin-bottom: 4px;">ভাষা (Language)</label>
-          <select id="langs" style="width: 100%; padding: 8px; border: 1px solid #cbd5e1; border-radius: 8px; font-size: 0.95rem;">
+        <div style="flex:1;">
+          <label>ভাষা</label>
+          <select id="langs" style="width:100%; padding:8px;">
             <option value="eng+ben">English + বাংলা</option>
-            <option value="ben">শুধু বাংলা (ben)</option>
-            <option value="eng">শুধু English (eng)</option>
+            <option value="ben">বাংলা</option>
+            <option value="eng">English</option>
           </select>
         </div>
       </div>
-
-      <div style="display: flex; gap: 10px; flex-wrap: wrap;">
-        <button id="btn-pdf" style="flex: 1; padding: 12px; background: #2563eb; color: #fff; border: none; border-radius: 8px; font-weight: 600; font-size: 0.95rem; cursor: pointer;">
-          PDF সিলেক্ট করুন
-        </button>
-        <button id="btn-img" style="flex: 1; padding: 12px; background: #059669; color: #fff; border: none; border-radius: 8px; font-weight: 600; font-size: 0.95rem; cursor: pointer;">
-          ছবি সিলেক্ট করুন
-        </button>
+      <div style="display:flex; gap:10px;">
+        <button id="btn-pdf" style="flex:1; padding:12px; background:#2563eb; color:#fff; border:none; border-radius:8px; cursor:pointer;">PDF সিলেক্ট</button>
+        <button id="btn-img" style="flex:1; padding:12px; background:#059669; color:#fff; border:none; border-radius:8px; cursor:pointer;">ছবি সিলেক্ট</button>
       </div>
     </div>
 
-    <div style="background: #0f172a; color: #e2e8f0; padding: 14px; border-radius: 12px;">
-      <div style="font-size: 0.8rem; color: #94a3b8; margin-bottom: 6px;">প্রোগ্রেস ও আউটপুট লগ:</div>
-      <pre id="status" style="margin: 0; white-space: pre-wrap; word-break: break-word; font-size: 0.85rem; line-height: 1.5; max-height: 280px; overflow-y: auto;">প্রস্তুত। PDF বা ছবি সিলেক্ট করুন...</pre>
+    <div style="background:#0f172a; color:#e2e8f0; padding:14px; border-radius:12px;">
+      <pre id="status" style="margin:0; white-space:pre-wrap; font-size:.85rem; max-height:280px; overflow-y:auto;">প্রস্তুত।</pre>
     </div>
   </div>
 `;
@@ -69,8 +59,6 @@ function log(msg) {
 function setBusy(busy) {
   btnPdf.disabled = busy;
   btnImg.disabled = busy;
-  btnPdf.style.opacity = busy ? "0.6" : "1";
-  btnImg.style.opacity = busy ? "0.6" : "1";
 }
 
 function formatOutput(text, format, sourcePath) {
@@ -87,59 +75,35 @@ async function runOcrOnImage(imgPath, outputDir, format, langs) {
   const outPath = await invoke("prepare_output", {
     task: { image_path: imgPath, output_dir: outputDir, format }
   });
-
   const src = convertFileSrc(imgPath);
   const { data: { text } } = await Tesseract.recognize(src, langs);
-  const formatted = formatOutput(text, format, imgPath);
-
-  await invoke("write_text", { path: outPath, text: formatted });
-  log(`✔ সেভ হয়েছে: ${outPath}`);
-}
-
-async function processImages(paths, outputDir, format, langs) {
-  for (let i = 0; i < paths.length; i++) {
-    log(`[${i + 1}/${paths.length}] OCR চলছে...`);
-    await runOcrOnImage(paths[i], outputDir, format, langs);
-  }
-}
-
-async function processPdf(pdfPath, outputDir, format, langs) {
-  const baseName = pdfPath.split(/[/\\]/).pop().replace(/\.pdf$/i, "");
-  const imgDir = `${outputDir}/${baseName}`;
-
-  log(`PDF পেজগুলো ছবিতে রূপান্তর হচ্ছে...`);
-  const imgPaths = await invoke("pdf_to_images", {
-    pdfPath,
-    outputDir: imgDir
-  });
-
-  log(`মোট ${imgPaths.length}টি পেজ পাওয়া গেছে।`);
-  for (let i = 0; i < imgPaths.length; i++) {
-    log(`[পেজ ${i + 1}/${imgPaths.length}] OCR চলছে...`);
-    await runOcrOnImage(imgPaths[i], imgDir, format, langs);
-  }
+  await invoke("write_text", { path: outPath, text: formatOutput(text, format, imgPath) });
+  log(`✔ ${outPath}`);
 }
 
 btnPdf.addEventListener("click", async () => {
   try {
-    const selected = await open({
-      multiple: false,
-      filters: [{ name: "PDF", extensions: ["pdf"] }]
-    });
+    const selected = await open({ multiple: false, filters: [{ name: "PDF", extensions: ["pdf"] }] });
     if (!selected) return;
-
     const outDir = await open({ directory: true });
     if (!outDir) return;
 
     setBusy(true);
     const format = document.querySelector("#format").value;
     const langs = document.querySelector("#langs").value;
-    statusEl.textContent = "PDF প্রসেসিং শুরু হচ্ছে...";
+    statusEl.textContent = "PDF প্রসেসিং...";
 
-    await processPdf(selected, outDir, format, langs);
-    log("🎉 সব কাজ সফলভাবে শেষ হয়েছে!");
+    const baseName = selected.split(/[/\\]/).pop().replace(/\.pdf$/i, "");
+    const imgDir = `${outDir}/${baseName}`;
+    const imgPaths = await invoke("pdf_to_images", { pdfPath: selected, outputDir: imgDir });
+    log(`মোট ${imgPaths.length} পেজ`);
+    for (let i = 0; i < imgPaths.length; i++) {
+      log(`[${i + 1}/${imgPaths.length}]`);
+      await runOcrOnImage(imgPaths[i], imgDir, format, langs);
+    }
+    log("🎉 সম্পন্ন!");
   } catch (err) {
-    log(`❌ ত্রুটি: ${err}`);
+    log(`❌ ${err}`);
   } finally {
     setBusy(false);
   }
@@ -147,24 +111,23 @@ btnPdf.addEventListener("click", async () => {
 
 btnImg.addEventListener("click", async () => {
   try {
-    const selected = await open({
-      multiple: true,
-      filters: [{ name: "Images", extensions: ["png", "jpg", "jpeg", "webp"] }]
-    });
+    const selected = await open({ multiple: true, filters: [{ name: "Images", extensions: ["png", "jpg", "jpeg", "webp"] }] });
     if (!selected || selected.length === 0) return;
-
     const outDir = await open({ directory: true });
     if (!outDir) return;
 
     setBusy(true);
     const format = document.querySelector("#format").value;
     const langs = document.querySelector("#langs").value;
-    statusEl.textContent = "ইমেজ OCR শুরু হচ্ছে...";
+    statusEl.textContent = "OCR শুরু...";
 
-    await processImages(selected, outDir, format, langs);
-    log("🎉 সব কাজ সফলভাবে শেষ হয়েছে!");
+    for (let i = 0; i < selected.length; i++) {
+      log(`[${i + 1}/${selected.length}]`);
+      await runOcrOnImage(selected[i], outDir, format, langs);
+    }
+    log("🎉 সম্পন্ন!");
   } catch (err) {
-    log(`❌ ত্রুটি: ${err}`);
+    log(`❌ ${err}`);
   } finally {
     setBusy(false);
   }
