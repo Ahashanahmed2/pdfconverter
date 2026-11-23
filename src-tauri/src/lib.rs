@@ -1,57 +1,36 @@
-use serde::{Deserialize, Serialize};
-use std::fs;
-use std::path::Path;
-
-#[derive(Serialize, Deserialize)]
-struct OcrTask {
-    image_path: String,
-    output_dir: String,
-    format: String,
-}
-
-#[tauri::command]
-fn prepare_output(task: OcrTask) -> Result<String, String> {
-    let img_path = Path::new(&task.image_path);
-    let stem = img_path.file_stem().unwrap_or_default().to_string_lossy();
-    let out_path = Path::new(&task.output_dir).join(format!("{}.{}", stem, task.format));
-    fs::create_dir_all(&task.output_dir).map_err(|e| e.to_string())?;
-    Ok(out_path.to_string_lossy().to_string())
-}
-
-#[tauri::command]
-fn write_text(path: String, text: String) -> Result<(), String> {
-    if let Some(parent) = Path::new(&path).parent() {
-        fs::create_dir_all(parent).map_err(|e| e.to_string())?;
-    }
-    fs::write(&path, text).map_err(|e| e.to_string())
-}
+use hayro::{render, InterpreterSettings, PdfData, RenderSettings};
+use hayro_interpret::hayro_syntax::Pdf;
+use image::{DynamicImage, ImageBuffer, Rgba};
+use std::sync::Arc;
 
 #[tauri::command]
 async fn pdf_to_images(pdf_path: String, output_dir: String) -> Result<Vec<String>, String> {
     let bytes = fs::read(&pdf_path).map_err(|e| e.to_string())?;
-    let pdf = hayro::Pdf::from_bytes(&bytes).map_err(|e| e.to_string())?;
+    let data: PdfData = Arc::new(bytes);
+    let pdf = Pdf::new(data).map_err(|e| format!("{:?}", e))?;
+
     let mut paths = Vec::new();
     fs::create_dir_all(&output_dir).map_err(|e| e.to_string())?;
 
+    let interpreter_settings = InterpreterSettings::default();
+    let render_settings = RenderSettings::default();
+
     for (i, page) in pdf.pages().iter().enumerate() {
-        let img = page.render(1500, 1500).map_err(|e| e.to_string())?;
+        let pixmap = render(page, &interpreter_settings, &render_settings);
+        let width = pixmap.width() as u32;
+        let height = pixmap.height() as u32;
+        let rgba_bytes = pixmap.take_u8();
+
+        let img_buf: ImageBuffer<Rgba<u8>, Vec<u8>> =
+            ImageBuffer::from_raw(width, height, rgba_bytes)
+                .ok_or_else(|| "Failed to create image buffer".to_string())?;
+
         let out_path = Path::new(&output_dir).join(format!("{}.png", i + 1));
-        img.save(&out_path).map_err(|e| e.to_string())?;
+        DynamicImage::ImageRgba8(img_buf)
+            .save(&out_path)
+            .map_err(|e| e.to_string())?;
         paths.push(out_path.to_string_lossy().to_string());
     }
-    Ok(paths)
-}
 
-#[cfg_attr(mobile, tauri::mobile_entry_point)]
-pub fn run() {
-    tauri::Builder::default()
-        .plugin(tauri_plugin_dialog::init())
-        .plugin(tauri_plugin_fs::init())
-        .invoke_handler(tauri::generate_handler![
-            prepare_output,
-            write_text,
-            pdf_to_images
-        ])
-        .run(tauri::generate_context!())
-        .expect("error while running tauri application");
+    Ok(paths)
 }
