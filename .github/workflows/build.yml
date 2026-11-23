@@ -132,6 +132,15 @@ jobs:
       - name: Init Android project
         run: |
           npx tauri android init --ci
+            # ==========================================
+      # 9. Initialize Tauri Android
+      # ==========================================
+      - name: Init Android project
+        run: |
+          ls -la src-tauri/tauri.conf.json
+          cat src-tauri/tauri.conf.json
+          npx tauri android init --ci
+
 
       # ==========================================
       # 10. Build Android APK
