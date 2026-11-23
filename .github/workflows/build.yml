@@ -146,6 +146,7 @@ jobs:
       # ==========================================
       - name: Build APK
         run: |
+          npm run build
           npx tauri android build --apk
 
       # ==========================================
