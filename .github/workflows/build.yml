@@ -138,7 +138,6 @@ jobs:
       - name: Init Android project
         run: |
           ls -la src-tauri/tauri.conf.json
-          cat src-tauri/tauri.conf.json
           npx tauri android init --ci
 
 
