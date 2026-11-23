@@ -3,38 +3,63 @@ name: Build and Sign Android APK
 
 on:
   push:
-    branches: [main]
+    branches:
+      - main
+
   workflow_dispatch:
+
+permissions:
+  contents: read
 
 jobs:
   build:
+    name: Build Signed Android APK
     runs-on: ubuntu-latest
 
     steps:
+
+      # ==========================================
+      # 1. Checkout Repository
+      # ==========================================
       - name: Checkout
         uses: actions/checkout@v4
 
+      # ==========================================
+      # 2. Setup Node.js
+      # ==========================================
       - name: Setup Node
         uses: actions/setup-node@v4
         with:
           node-version: '20'
 
+      # ==========================================
+      # 3. Setup Rust
+      # ==========================================
       - name: Setup Rust
         uses: dtolnay/rust-toolchain@stable
         with:
           targets: aarch64-linux-android,armv7-linux-androideabi,i686-linux-android,x86_64-linux-android
 
+      # ==========================================
+      # 4. Setup Java
+      # ==========================================
       - name: Setup Java
         uses: actions/setup-java@v4
         with:
           distribution: temurin
           java-version: '17'
 
+      # ==========================================
+      # 5. Setup Android SDK
+      # ==========================================
       - name: Setup Android SDK
         uses: android-actions/setup-android@v4
         with:
           cmdline-tools-version: 12266719
 
+      # ==========================================
+      # 6. Install Android NDK
+      # ==========================================
       - name: Install NDK
         run: |
           yes | $ANDROID_HOME/cmdline-tools/latest/bin/sdkmanager \
@@ -44,30 +69,54 @@ jobs:
             "build-tools;34.0.0"
 
           echo "NDK_HOME=$ANDROID_HOME/ndk/26.1.10909125" >> $GITHUB_ENV
+
           echo "ANDROID_NDK_HOME=$ANDROID_HOME/ndk/26.1.10909125" >> $GITHUB_ENV
 
+      # ==========================================
+      # 7. Install Dependencies
+      # ==========================================
       - name: Install dependencies
         run: |
           npm install
           npm install -D @tauri-apps/cli@^2
 
-      # Decode and validate PKCS12 Keystore
+      # ==========================================
+      # 8. Decode and Verify Keystore
+      # ==========================================
       - name: Decode and Verify Keystore
         env:
-          KEYSTORE_BASE64: ${{ secrets.KEYSTORE_BASE64 }}
-          KEYSTORE_PASSWORD: ${{ secrets.KEYSTORE_PASSWORD }}
-          KEY_ALIAS: ${{ secrets.KEY_ALIAS }}
+          KEYSTORE_BASE64: ${{ secrets.ANDROID_KEYSTORE_BASE64 }}
+          KEYSTORE_PASSWORD: ${{ secrets.ANDROID_KEYSTORE_PASSWORD }}
+          KEY_ALIAS: ${{ secrets.ANDROID_KEY_ALIAS }}
+
         run: |
           set -e
 
+          echo "Checking Keystore Secrets..."
+
           test -n "$KEYSTORE_BASE64" || {
-            echo "Keystore Base64 secret missing"
+            echo "ERROR: ANDROID_KEYSTORE_BASE64 missing"
             exit 1
           }
 
-          printf '%s' "$KEYSTORE_BASE64" | base64 --decode > "$RUNNER_TEMP/release-key.p12"
+          test -n "$KEYSTORE_PASSWORD" || {
+            echo "ERROR: ANDROID_KEYSTORE_PASSWORD missing"
+            exit 1
+          }
+
+          test -n "$KEY_ALIAS" || {
+            echo "ERROR: ANDROID_KEY_ALIAS missing"
+            exit 1
+          }
+
+          echo "Decoding Keystore..."
+
+          printf '%s' "$KEYSTORE_BASE64" | base64 --decode \
+            > "$RUNNER_TEMP/release-key.p12"
 
           chmod 600 "$RUNNER_TEMP/release-key.p12"
+
+          echo "Verifying PKCS12 Keystore..."
 
           keytool -list \
             -keystore "$RUNNER_TEMP/release-key.p12" \
@@ -75,72 +124,136 @@ jobs:
             -storepass "$KEYSTORE_PASSWORD" \
             -alias "$KEY_ALIAS"
 
+          echo "Keystore verification successful!"
+
+      # ==========================================
+      # 9. Initialize Tauri Android
+      # ==========================================
       - name: Init Android project
-        run: npx tauri android init --ci
+        run: |
+          npx tauri android init --ci
 
-      # Build APK
+      # ==========================================
+      # 10. Build Android APK
+      # ==========================================
       - name: Build APK
-        run: npx tauri android build --apk
+        run: |
+          npx tauri android build --apk
 
-      # Sign APK
+      # ==========================================
+      # 11. Locate, Align and Sign APK
+      # ==========================================
       - name: Sign APK
         env:
-          KEYSTORE_PASSWORD: ${{ secrets.KEYSTORE_PASSWORD }}
-          KEY_PASSWORD: ${{ secrets.KEY_PASSWORD }}
-          KEY_ALIAS: ${{ secrets.KEY_ALIAS }}
+          KEYSTORE_PASSWORD: ${{ secrets.ANDROID_KEYSTORE_PASSWORD }}
+          KEY_PASSWORD: ${{ secrets.ANDROID_KEY_PASSWORD }}
+          KEY_ALIAS: ${{ secrets.ANDROID_KEY_ALIAS }}
+
         run: |
           set -e
 
           APK_DIR="src-tauri/gen/android/app/build/outputs/apk/universal/release"
-          cd "$APK_DIR"
 
-          if [ -f "app-universal-release-unsigned.apk" ]; then
-            UNSIGNED_APK="app-universal-release-unsigned.apk"
-          elif [ -f "app-universal-release.apk" ]; then
-            UNSIGNED_APK="app-universal-release.apk"
-          else
-            echo "Unsigned APK not found"
-            ls -la
+          if [ ! -d "$APK_DIR" ]; then
+            echo "Universal APK directory not found."
+
+            find src-tauri/gen/android/app/build/outputs/apk \
+              -type f -name "*.apk" || true
+
             exit 1
           fi
 
+          cd "$APK_DIR"
+
+          echo "Available APK files:"
+          ls -lh *.apk || true
+
+          # Find unsigned APK
+          UNSIGNED_APK=""
+
+          if [ -f "app-universal-release-unsigned.apk" ]; then
+            UNSIGNED_APK="app-universal-release-unsigned.apk"
+
+          elif [ -f "app-universal-release.apk" ]; then
+            UNSIGNED_APK="app-universal-release.apk"
+
+          else
+            echo "No expected release APK found."
+            find . -maxdepth 1 -name "*.apk"
+            exit 1
+          fi
+
+          echo "Using APK: $UNSIGNED_APK"
+
           BUILD_TOOLS="$ANDROID_HOME/build-tools/34.0.0"
+
+          # Zipalign
+          echo "Running Zipalign..."
 
           "$BUILD_TOOLS/zipalign" -v -p 4 \
             "$UNSIGNED_APK" \
             app-universal-release-aligned.apk
 
-          # Password files
-          KS_PASS_FILE="$RUNNER_TEMP/ks-pass.txt"
-          KEY_PASS_FILE="$RUNNER_TEMP/key-pass.txt"
+          # Create password files
+          printf '%s\n' "$KEYSTORE_PASSWORD" \
+            > "$RUNNER_TEMP/ks-pass.txt"
 
-          printf '%s\n' "$KEYSTORE_PASSWORD" > "$KS_PASS_FILE"
-          printf '%s\n' "$KEY_PASSWORD" > "$KEY_PASS_FILE"
+          printf '%s\n' "$KEY_PASSWORD" \
+            > "$RUNNER_TEMP/key-pass.txt"
 
-          chmod 600 "$KS_PASS_FILE" "$KEY_PASS_FILE"
+          chmod 600 \
+            "$RUNNER_TEMP/ks-pass.txt" \
+            "$RUNNER_TEMP/key-pass.txt"
 
-          # Sign using PKCS12
+          # Sign APK
+          echo "Signing APK..."
+
           "$BUILD_TOOLS/apksigner" sign \
             --ks "$RUNNER_TEMP/release-key.p12" \
             --ks-type PKCS12 \
-            --ks-pass "file:$KS_PASS_FILE" \
-            --key-pass "file:$KEY_PASS_FILE" \
+            --ks-pass "file:$RUNNER_TEMP/ks-pass.txt" \
+            --key-pass "file:$RUNNER_TEMP/key-pass.txt" \
             --ks-key-alias "$KEY_ALIAS" \
             --out app-universal-release-signed.apk \
             app-universal-release-aligned.apk
 
-          # Verify signature
+          # Verify APK Signature
+          echo "Verifying APK Signature..."
+
           "$BUILD_TOOLS/apksigner" verify \
             --verbose \
             --print-certs \
             app-universal-release-signed.apk
 
-          rm -f "$KS_PASS_FILE" "$KEY_PASS_FILE"
+          # Final APK information
+          echo "=================================="
+          echo "APK SIGNING SUCCESSFUL"
+          echo "=================================="
 
-      # Upload signed APK
-      - name: Upload signed APK
+          ls -lh app-universal-release-signed.apk
+
+          # Cleanup passwords
+          rm -f \
+            "$RUNNER_TEMP/ks-pass.txt" \
+            "$RUNNER_TEMP/key-pass.txt"
+
+      # ==========================================
+      # 12. Upload Signed APK
+      # ==========================================
+      - name: Upload Signed APK
         uses: actions/upload-artifact@v4
         with:
           name: pdfconverter-signed-apk
           path: src-tauri/gen/android/app/build/outputs/apk/universal/release/app-universal-release-signed.apk
           if-no-files-found: error
+          retention-days: 30
+
+      # ==========================================
+      # 13. Cleanup Keystore
+      # ==========================================
+      - name: Cleanup Keystore
+        if: always()
+        run: |
+          rm -f "$RUNNER_TEMP/release-key.p12"
+          rm -f "$RUNNER_TEMP/ks-pass.txt"
+          rm -f "$RUNNER_TEMP/key-pass.txt"
