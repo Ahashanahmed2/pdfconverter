@@ -147,6 +147,7 @@ jobs:
       - name: Build APK
         run: |
           npm run build
+          ls -la dist dist/assets 2>/dev/null || ls -la dist
           npx tauri android build --apk
 
       # ==========================================
