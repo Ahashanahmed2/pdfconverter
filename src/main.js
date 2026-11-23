@@ -1,6 +1,7 @@
 import { invoke, convertFileSrc } from "@tauri-apps/api/core";
 import { open } from "@tauri-apps/plugin-dialog";
 import Tesseract from "tesseract.js";
+document.body.innerHTML = "<div style='padding:16px;font-family:sans-serif;'>JS Started...</div>";
 
 const app = document.querySelector("#app");
 
