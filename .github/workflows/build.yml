@@ -1,8 +1,9 @@
+
 name: Build and Sign Android APK
 
 on:
   push:
-    branches: [main]  # আপনার branch: master (প্রথম workflow-এর মতো)
+    branches: [main, master]
   workflow_dispatch:
 
 jobs:
@@ -26,7 +27,7 @@ jobs:
       - name: Setup Java
         uses: actions/setup-java@v4
         with:
-          distribution: 'temurin'
+          distribution: temurin
           java-version: '17'
 
       - name: Setup Android SDK
@@ -36,7 +37,12 @@ jobs:
 
       - name: Install NDK
         run: |
-          echo "y" | $ANDROID_HOME/cmdline-tools/latest/bin/sdkmanager --sdk_root=$ANDROID_HOME "ndk;26.1.10909125" "platforms;android-34" "build-tools;34.0.0"
+          yes | $ANDROID_HOME/cmdline-tools/latest/bin/sdkmanager \
+            --sdk_root=$ANDROID_HOME \
+            "ndk;26.1.10909125" \
+            "platforms;android-34" \
+            "build-tools;34.0.0"
+
           echo "NDK_HOME=$ANDROID_HOME/ndk/26.1.10909125" >> $GITHUB_ENV
           echo "ANDROID_NDK_HOME=$ANDROID_HOME/ndk/26.1.10909125" >> $GITHUB_ENV
 
@@ -44,65 +50,97 @@ jobs:
         run: |
           npm install
           npm install -D @tauri-apps/cli@^2
-          
 
-      # ✅ Keystore ডিকোড (init-এর আগে)
-      - name: Decode Keystore
+      # Decode and validate PKCS12 Keystore
+      - name: Decode and Verify Keystore
+        env:
+          KEYSTORE_BASE64: ${{ secrets.KEYSTORE_BASE64 }}
+          KEYSTORE_PASSWORD: ${{ secrets.KEYSTORE_PASSWORD }}
+          KEY_ALIAS: ${{ secrets.KEY_ALIAS }}
         run: |
-          echo "${{ secrets.ANDROID_KEY_BASE64 }}" | base64 --decode > ${{ github.workspace }}/my-release-key.jks
-          ls -la ${{ github.workspace }}/my-release-key.jks
+          set -e
+
+          test -n "$KEYSTORE_BASE64" || {
+            echo "Keystore Base64 secret missing"
+            exit 1
+          }
+
+          printf '%s' "$KEYSTORE_BASE64" | base64 --decode > "$RUNNER_TEMP/release-key.p12"
+
+          chmod 600 "$RUNNER_TEMP/release-key.p12"
+
+          keytool -list \
+            -keystore "$RUNNER_TEMP/release-key.p12" \
+            -storetype PKCS12 \
+            -storepass "$KEYSTORE_PASSWORD" \
+            -alias "$KEY_ALIAS"
 
       - name: Init Android project
         run: npx tauri android init --ci
 
-      # ============================================================
-      # ধাপ ১: Universal UNSIGNED APK বিল্ড
-      # ============================================================
+      # Build APK
       - name: Build APK
         run: npx tauri android build --apk
 
-      # ============================================================
-      # ধাপ ২: zipalign + apksigner দিয়ে সাইন
-      # ============================================================
+      # Sign APK
       - name: Sign APK
+        env:
+          KEYSTORE_PASSWORD: ${{ secrets.KEYSTORE_PASSWORD }}
+          KEY_PASSWORD: ${{ secrets.KEY_PASSWORD }}
+          KEY_ALIAS: ${{ secrets.KEY_ALIAS }}
         run: |
-          cd src-tauri/gen/android/app/build/outputs/apk/universal/release/
+          set -e
+
+          APK_DIR="src-tauri/gen/android/app/build/outputs/apk/universal/release"
+          cd "$APK_DIR"
 
           if [ -f "app-universal-release-unsigned.apk" ]; then
             UNSIGNED_APK="app-universal-release-unsigned.apk"
           elif [ -f "app-universal-release.apk" ]; then
             UNSIGNED_APK="app-universal-release.apk"
           else
-            echo "❌ কোনো unsigned APK পাওয়া যায়নি!"
+            echo "Unsigned APK not found"
             ls -la
             exit 1
           fi
-          echo "Using: $UNSIGNED_APK"
 
           BUILD_TOOLS="$ANDROID_HOME/build-tools/34.0.0"
 
-          # zipalign (sign করার আগে বাধ্যতামূলক)
-          "$BUILD_TOOLS/zipalign" -v -p 4 "$UNSIGNED_APK" app-universal-release-aligned.apk
+          "$BUILD_TOOLS/zipalign" -v -p 4 \
+            "$UNSIGNED_APK" \
+            app-universal-release-aligned.apk
 
-          # apksigner দিয়ে সাইন
+          # Password files
+          KS_PASS_FILE="$RUNNER_TEMP/ks-pass.txt"
+          KEY_PASS_FILE="$RUNNER_TEMP/key-pass.txt"
+
+          printf '%s\n' "$KEYSTORE_PASSWORD" > "$KS_PASS_FILE"
+          printf '%s\n' "$KEY_PASSWORD" > "$KEY_PASS_FILE"
+
+          chmod 600 "$KS_PASS_FILE" "$KEY_PASS_FILE"
+
+          # Sign using PKCS12
           "$BUILD_TOOLS/apksigner" sign \
-            --ks ${{ github.workspace }}/my-release-key.jks \
-            --ks-pass pass:${{ secrets.ANDROID_STORE_PASSWORD }} \
-            --key-pass pass:${{ secrets.ANDROID_KEY_PASSWORD }} \
-            --ks-key-alias ${{ secrets.ANDROID_KEY_ALIAS }} \
+            --ks "$RUNNER_TEMP/release-key.p12" \
+            --ks-type PKCS12 \
+            --ks-pass "file:$KS_PASS_FILE" \
+            --key-pass "file:$KEY_PASS_FILE" \
+            --ks-key-alias "$KEY_ALIAS" \
             --out app-universal-release-signed.apk \
             app-universal-release-aligned.apk
 
-          # verify
-          echo "===== Signature Verify ====="
-          "$BUILD_TOOLS/apksigner" verify --print-certs app-universal-release-signed.apk
+          # Verify signature
+          "$BUILD_TOOLS/apksigner" verify \
+            --verbose \
+            --print-certs \
+            app-universal-release-signed.apk
 
-      # ============================================================
-      # ধাপ ৩: Signed APK আপলোড
-      # ============================================================
+          rm -f "$KS_PASS_FILE" "$KEY_PASS_FILE"
+
+      # Upload signed APK
       - name: Upload signed APK
         uses: actions/upload-artifact@v4
         with:
-          name: aqis-ocr-signed-apk
+          name: pdfconverter-signed-apk
           path: src-tauri/gen/android/app/build/outputs/apk/universal/release/app-universal-release-signed.apk
           if-no-files-found: error
