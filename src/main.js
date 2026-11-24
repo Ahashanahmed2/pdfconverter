@@ -15,6 +15,7 @@ window.addEventListener("unhandledrejection", (e) => {
 // ---- Imports ----
 import { invoke, convertFileSrc } from "@tauri-apps/api/core";
 import { open } from "@tauri-apps/plugin-dialog";
+import { pickFolder, writeTextFile, writeFile } from "tauri-plugin-scoped-storage-api";
 
 const app = document.querySelector("#app");
 
@@ -75,24 +76,35 @@ function formatOutput(text, format, sourcePath) {
   return text;
 }
 
-async function runOcr(imgPath, outputDir, format, langs) {
-  // Tesseract lazy load (শুধু দরকারমতো)
+// একক ছবি OCR করে scoped-storage দিয়ে সরাসরি লেখা
+async function runOcr(imgPath, folderId, folderPath, format, langs) {
   const Tesseract = (await import("tesseract.js")).default;
-  const outPath = await invoke("prepare_output", {
-    task: { image_path: imgPath, output_dir: outputDir, format }
-  });
+  
+  const fileName = imgPath.split(/[/\\]/).pop().replace(/\.\w+$/, `.${format}`);
   const src = convertFileSrc(imgPath);
+  
+  log(`OCR চলছে: ${fileName}`);
   const { data: { text } } = await Tesseract.recognize(src, langs);
-  await invoke("write_text", { path: outPath, text: formatOutput(text, format, imgPath) });
-  log(`✔ ${outPath}`);
+  
+  const formatted = formatOutput(text, format, imgPath);
+  
+  // scoped-storage দিয়ে ফাইল লেখা (folder.id এবং relative path)
+  await writeTextFile(folderId, `${folderPath}/${fileName}`, formatted);
+  log(`✔ সেভ হয়েছে: ${fileName}`);
 }
 
 btnPdf.addEventListener("click", async () => {
   try {
-    const selected = await open({ multiple: false, filters: [{ name: "PDF", extensions: ["pdf"] }] });
+    // ১. PDF ফাইল সিলেক্ট (অফিসিয়াল dialog)
+    const selected = await open({ 
+      multiple: false, 
+      filters: [{ name: "PDF", extensions: ["pdf"] }] 
+    });
     if (!selected) return;
-    const outDir = await open({ directory: true });
-    if (!outDir) return;
+
+    // ২. আউটপুট ফোল্ডার সিলেক্ট (scoped-storage - Android এ কাজ করে)
+    const folder = await pickFolder();
+    if (!folder) return;
 
     setBusy(true);
     const format = document.querySelector("#format").value;
@@ -100,16 +112,43 @@ btnPdf.addEventListener("click", async () => {
     statusEl.textContent = "PDF প্রসেসিং...";
 
     const baseName = selected.split(/[/\\]/).pop().replace(/\.pdf$/i, "");
-    const imgDir = `${outDir}/${baseName}`;
-    const imgPaths = await invoke("pdf_to_images", { pdfPath: selected, outputDir: imgDir });
-    log(`মোট ${imgPaths.length} পেজ`);
-    for (let i = 0; i < imgPaths.length; i++) {
-      log(`[${i + 1}/${imgPaths.length}]`);
-      await runOcr(imgPaths[i], imgDir, format, langs);
+    
+    // Rust দিয়ে PDF → PNG বাইট। এখানে আমরা সরাসরি Rust কে পাথ না দিয়ে বাইট চাইবো
+    // (নিচে Rust কোডে pdf_to_images_bytes ফাংশন যোগ করতে হবে)
+    log(`PDF পেজগুলো ছবিতে রূপান্তর হচ্ছে...`);
+    const pages = await invoke("pdf_to_images_bytes", { pdfPath: selected });
+    log(`মোট ${pages.length} পেজ পাওয়া গেছে।`);
+
+    for (let i = 0; i < pages.length; i++) {
+      const base64Data = pages[i];
+      const imgFileName = `${i + 1}.png`;
+      const imgPath = `${baseName}/${imgFileName}`;
+      
+      // PNG বাইট scoped-storage দিয়ে সেভ
+      const binaryString = atob(base64Data);
+      const bytes = new Uint8Array(binaryString.length);
+      for (let j = 0; j < binaryString.length; j++) {
+        bytes[j] = binaryString.charCodeAt(j);
+      }
+      await writeFile(folder.id, imgPath, bytes, { recursive: true, mimeType: "image/png" });
+      
+      // তারপর সেই ছবি OCR
+      log(`[${i + 1}/${pages.length}] OCR চলছে...`);
+      // OCR এর জন্য data URL ব্যবহার করি (যেহেতু আমরা ফাইল পাথ দিতে পারব না)
+      const dataUrl = `data:image/png;base64,${base64Data}`;
+      const Tesseract = (await import("tesseract.js")).default;
+      const { data: { text } } = await Tesseract.recognize(dataUrl, langs);
+      
+      const txtName = `${i + 1}.${format}`;
+      const txtPath = `${baseName}/${txtName}`;
+      const formatted = formatOutput(text, format, `${baseName}/${imgFileName}`);
+      await writeTextFile(folder.id, txtPath, formatted);
+      log(`✔ সেভ: ${txtPath}`);
     }
     log("🎉 সম্পন্ন!");
   } catch (err) {
     log(`❌ ${err}`);
+    console.error(err);
   } finally {
     setBusy(false);
   }
@@ -117,10 +156,16 @@ btnPdf.addEventListener("click", async () => {
 
 btnImg.addEventListener("click", async () => {
   try {
-    const selected = await open({ multiple: true, filters: [{ name: "Images", extensions: ["png", "jpg", "jpeg", "webp"] }] });
+    // ১. ছবি সিলেক্ট (অফিসিয়াল dialog)
+    const selected = await open({ 
+      multiple: true, 
+      filters: [{ name: "Images", extensions: ["png", "jpg", "jpeg", "webp"] }] 
+    });
     if (!selected || selected.length === 0) return;
-    const outDir = await open({ directory: true });
-    if (!outDir) return;
+
+    // ২. আউটপুট ফোল্ডার সিলেক্ট (scoped-storage)
+    const folder = await pickFolder();
+    if (!folder) return;
 
     setBusy(true);
     const format = document.querySelector("#format").value;
@@ -129,11 +174,12 @@ btnImg.addEventListener("click", async () => {
 
     for (let i = 0; i < selected.length; i++) {
       log(`[${i + 1}/${selected.length}]`);
-      await runOcr(selected[i], outDir, format, langs);
+      await runOcr(selected[i], folder.id, "", format, langs);
     }
     log("🎉 সম্পন্ন!");
   } catch (err) {
     log(`❌ ${err}`);
+    console.error(err);
   } finally {
     setBusy(false);
   }
