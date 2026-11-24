@@ -54,14 +54,14 @@ async fn render_pdf_page(
 
         let cache = RenderCache::new();
         let interpreter_settings = InterpreterSettings::default();
-        let pixmap_settings = PixmapSettings::default();
+        let render_settings = RenderSettings::default();
 
-        // bg_color সাদা না দিলে PNG-র পেছনটা স্বচ্ছ (transparent) থাকে
-        let render_settings = RenderSettings {
+        // hayro 0.8: স্কেল ও ব্যাকগ্রাউন্ড PixmapSettings-এ থাকে।
+        // bg_color সাদা না দিলে PNG-র পেছনটা স্বচ্ছ (transparent) থাকে।
+        let pixmap_settings = PixmapSettings {
             x_scale: scale,
             y_scale: scale,
             bg_color: WHITE,
-            ..Default::default()
         };
 
         let pixmap = render(
