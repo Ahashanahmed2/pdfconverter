@@ -21,7 +21,6 @@ import { pickFolder, writeTextFile, writeFile } from "tauri-plugin-scoped-storag
 
 const app = document.querySelector("#app");
 
-// প্রথমে UI দেখাই — Tesseract পরে lazy load
 app.innerHTML = `
   <div style="max-width: 600px; margin: 0 auto; padding: 20px;">
     <h1 style="font-size: 1.5rem; margin: 0 0 4px;">AQIS OCR</h1>
@@ -52,6 +51,17 @@ app.innerHTML = `
       </div>
     </div>
 
+    <div id="progress-box" style="display:none; background:#fff; padding:14px 16px; border-radius:12px; margin-bottom:16px;">
+      <div style="display:flex; justify-content:space-between; font-size:.9rem; font-weight:600; margin-bottom:8px;">
+        <span id="progress-label">—</span>
+        <span id="progress-pct">0%</span>
+      </div>
+      <div style="height:10px; background:#e2e8f0; border-radius:999px; overflow:hidden;">
+        <div id="progress-bar" style="height:100%; width:0%; background:#2563eb; transition:width .25s;"></div>
+      </div>
+      <div id="progress-sub" style="font-size:.8rem; color:#64748b; margin-top:8px;"></div>
+    </div>
+
     <div style="background:#0f172a; color:#e2e8f0; padding:14px; border-radius:12px;">
       <pre id="status" style="margin:0; white-space:pre-wrap; font-size:.85rem; max-height:280px; overflow-y:auto;">প্রস্তুত।</pre>
     </div>
@@ -61,6 +71,11 @@ app.innerHTML = `
 const statusEl = document.querySelector("#status");
 const btnPdf = document.querySelector("#btn-pdf");
 const btnImg = document.querySelector("#btn-img");
+const progressBox = document.querySelector("#progress-box");
+const progressLabel = document.querySelector("#progress-label");
+const progressPct = document.querySelector("#progress-pct");
+const progressBar = document.querySelector("#progress-bar");
+const progressSub = document.querySelector("#progress-sub");
 
 function log(msg) {
   statusEl.textContent += `\n${msg}`;
@@ -72,44 +87,57 @@ function setBusy(busy) {
   btnImg.disabled = busy;
 }
 
+// ---- Progress ----
+// done = সম্পন্ন আইটেম সংখ্যা, frac = বর্তমান আইটেমের অগ্রগতি (0..1)
+function setProgress(kind, done, total, frac, sub) {
+  const pct = Math.min(100, Math.round(((done + frac) / total) * 100));
+  const current = Math.min(done + 1, total);
+  progressBox.style.display = "block";
+  progressLabel.textContent = `${kind} ${current}/${total}`;
+  progressPct.textContent = `${pct}%`;
+  progressBar.style.width = `${pct}%`;
+  progressSub.textContent = sub || "";
+}
+
+function finishProgress(kind, total) {
+  progressBox.style.display = "block";
+  progressLabel.textContent = `${kind} ${total}/${total} সম্পন্ন`;
+  progressPct.textContent = "100%";
+  progressBar.style.width = "100%";
+  progressSub.textContent = "";
+}
+
 function formatOutput(text, format, sourcePath) {
   if (format === "json") return JSON.stringify({ source: sourcePath, text: text.trim() }, null, 2);
   if (format === "md") return `# OCR\n\n**Source:** \`${sourcePath}\`\n\n${text.trim()}`;
   return text;
 }
 
-// একক ছবি OCR করে scoped-storage দিয়ে সরাসরি লেখা
-async function runOcr(imgPath, folderId, folderPath, format, langs) {
+// একটাই worker বানাই; logger দিয়ে OCR-এর % আপডেট হয়
+// ctx = { kind, index, total, base } — base = OCR শুরুর আগে কত অংশ শেষ (0..1)
+async function makeWorker(langs, ctx) {
   const Tesseract = (await import("tesseract.js")).default;
-
-  const fileName = imgPath.split(/[/\\]/).pop().replace(/\.\w+$/, `.${format}`);
-
-  log(`OCR চলছে: ${fileName}`);
-
-  // content:// URI সরাসরি fetch হয় না, তাই bytes পড়ে Blob বানাই
-  const bytes = await readFile(imgPath);
-  const blob = new Blob([bytes]);
-  const { data: { text } } = await Tesseract.recognize(blob, langs);
-
-  const formatted = formatOutput(text, format, imgPath);
-
-  // scoped-storage দিয়ে ফাইল লেখা (folder.id এবং relative path)
-  const outPath = folderPath ? `${folderPath}/${fileName}` : fileName;
-  await writeTextFile(folderId, outPath, formatted);
-  log(`✔ সেভ হয়েছে: ${fileName}`);
+  return Tesseract.createWorker(langs, 1, {
+    logger: (m) => {
+      if (m.status === "recognizing text") {
+        const frac = ctx.base + (1 - ctx.base) * m.progress;
+        setProgress(ctx.kind, ctx.index, ctx.total, frac, "OCR চলছে...");
+      }
+    },
+  });
 }
 
+// ================= PDF =================
 btnPdf.addEventListener("click", async () => {
   let localPdfPath = null;
+  let worker = null;
   try {
-    // ১. PDF ফাইল সিলেক্ট (অফিসিয়াল dialog)
     const selected = await open({
       multiple: false,
-      filters: [{ name: "PDF", extensions: ["pdf"] }]
+      filters: [{ name: "PDF", extensions: ["pdf"] }],
     });
     if (!selected) return;
 
-    // ২. আউটপুট ফোল্ডার সিলেক্ট (scoped-storage - Android এ কাজ করে)
     const folder = await pickFolder();
     if (!folder) return;
 
@@ -117,77 +145,77 @@ btnPdf.addEventListener("click", async () => {
     const format = document.querySelector("#format").value;
     const langs = document.querySelector("#langs").value;
     statusEl.textContent = "PDF প্রসেসিং...";
+    progressBox.style.display = "none";
 
     const baseName = selected.split(/[/\\]/).pop().replace(/\.pdf$/i, "");
 
-    // ৩. content:// URI থেকে পড়ে অ্যাপের cache-এ কপি করি (Rust আসল পাথ চায়)
+    // content:// URI থেকে পড়ে cache-এ কপি
     log("PDF কপি করা হচ্ছে...");
     const pdfBytes = await readFile(selected);
     const cacheDir = await appCacheDir();
     localPdfPath = await join(cacheDir, "input.pdf");
     await fsWriteFile(localPdfPath, pdfBytes);
 
-    // ৪. পেজ সংখ্যা বের করি
     log("PDF পেজ সংখ্যা বের করা হচ্ছে...");
     const pageCount = await invoke("get_pdf_page_count", { pdfPath: localPdfPath });
     log(`মোট ${pageCount} পেজ পাওয়া গেছে।`);
 
-    const Tesseract = (await import("tesseract.js")).default;
+    const ctx = { kind: "পেজ", index: 0, total: pageCount, base: 0.1 };
+    setProgress("পেজ", 0, pageCount, 0, "OCR ইঞ্জিন লোড হচ্ছে...");
+    worker = await makeWorker(langs, ctx);
 
-    // ৫. প্রতিটি পেজ একে একে রেন্ডার এবং OCR করি
+    // প্রতিটি পেজ: রেন্ডার → ছবি সেভ → OCR → টেক্সট সেভ
     for (let i = 0; i < pageCount; i++) {
-      log(`[পেজ ${i + 1}/${pageCount}] রেন্ডার হচ্ছে...`);
+      ctx.index = i;
 
-      // Rust থেকে এই পেজের base64 PNG আসবে
-      const base64Data = await invoke("render_pdf_page", { pdfPath: localPdfPath, pageIndex: i });
+      setProgress("পেজ", i, pageCount, 0, "রেন্ডার হচ্ছে...");
+      let base64Data = await invoke("render_pdf_page", { pdfPath: localPdfPath, pageIndex: i });
 
-      const imgFileName = `${i + 1}.png`;
-      const imgPath = `${baseName}/${imgFileName}`;
-
-      // PNG ফাইল scoped-storage দিয়ে সেভ করি
       const binaryString = atob(base64Data);
-      const bytes = new Uint8Array(binaryString.length);
+      base64Data = null;
+      let bytes = new Uint8Array(binaryString.length);
       for (let j = 0; j < binaryString.length; j++) {
         bytes[j] = binaryString.charCodeAt(j);
       }
+
+      const imgFileName = `${i + 1}.png`;
+      const imgPath = `${baseName}/${imgFileName}`;
+      setProgress("পেজ", i, pageCount, 0.05, "ছবি সেভ হচ্ছে...");
       await writeFile(folder.id, imgPath, bytes, { recursive: true, mimeType: "image/png" });
-      log(`✔ ছবি সেভ: ${imgPath}`);
+      log(`✔ ছবি ${i + 1}/${pageCount} সেভ: ${imgPath}`);
 
-      log(`[পেজ ${i + 1}/${pageCount}] OCR চলছে...`);
+      // OCR (logger % আপডেট করবে)
+      const { data: { text } } = await worker.recognize(new Blob([bytes], { type: "image/png" }));
+      bytes = null;
 
-      // OCR এর জন্য data URL ব্যবহার করি
-      const dataUrl = `data:image/png;base64,${base64Data}`;
-      const { data: { text } } = await Tesseract.recognize(dataUrl, langs);
+      const txtPath = `${baseName}/${i + 1}.${format}`;
+      await writeTextFile(folder.id, txtPath, formatOutput(text, format, imgPath));
+      log(`✔ টেক্সট ${i + 1}/${pageCount} সেভ: ${txtPath}`);
 
-      const txtName = `${i + 1}.${format}`;
-      const txtPath = `${baseName}/${txtName}`;
-      const formatted = formatOutput(text, format, `${baseName}/${imgFileName}`);
-      await writeTextFile(folder.id, txtPath, formatted);
-      log(`✔ টেক্সট সেভ: ${txtPath}`);
+      setProgress("পেজ", i + 1, pageCount, 0, `${i + 1} পেজ সম্পন্ন`);
     }
+    finishProgress("পেজ", pageCount);
     log("🎉 সম্পন্ন!");
   } catch (err) {
     log(`❌ ${err}`);
     console.error(err);
   } finally {
-    // cache-এর অস্থায়ী PDF মুছে ফেলি
-    if (localPdfPath) {
-      try { await remove(localPdfPath); } catch (_) { /* উপেক্ষা */ }
-    }
+    if (worker) { try { await worker.terminate(); } catch (_) {} }
+    if (localPdfPath) { try { await remove(localPdfPath); } catch (_) {} }
     setBusy(false);
   }
 });
 
+// ================= ছবি =================
 btnImg.addEventListener("click", async () => {
+  let worker = null;
   try {
-    // ১. ছবি সিলেক্ট (অফিসিয়াল dialog)
     const selected = await open({
       multiple: true,
-      filters: [{ name: "Images", extensions: ["png", "jpg", "jpeg", "webp"] }]
+      filters: [{ name: "Images", extensions: ["png", "jpg", "jpeg", "webp"] }],
     });
     if (!selected || selected.length === 0) return;
 
-    // ২. আউটপুট ফোল্ডার সিলেক্ট (scoped-storage)
     const folder = await pickFolder();
     if (!folder) return;
 
@@ -195,16 +223,35 @@ btnImg.addEventListener("click", async () => {
     const format = document.querySelector("#format").value;
     const langs = document.querySelector("#langs").value;
     statusEl.textContent = "OCR শুরু...";
+    progressBox.style.display = "none";
 
-    for (let i = 0; i < selected.length; i++) {
-      log(`[${i + 1}/${selected.length}]`);
-      await runOcr(selected[i], folder.id, "", format, langs);
+    const total = selected.length;
+    const ctx = { kind: "ছবি", index: 0, total, base: 0.1 };
+    setProgress("ছবি", 0, total, 0, "OCR ইঞ্জিন লোড হচ্ছে...");
+    worker = await makeWorker(langs, ctx);
+
+    for (let i = 0; i < total; i++) {
+      ctx.index = i;
+      const imgPath = selected[i];
+      const fileName = imgPath.split(/[/\\]/).pop().replace(/\.\w+$/, `.${format}`);
+
+      setProgress("ছবি", i, total, 0, "ছবি পড়া হচ্ছে...");
+      const bytes = await readFile(imgPath);
+
+      const { data: { text } } = await worker.recognize(new Blob([bytes]));
+
+      await writeTextFile(folder.id, fileName, formatOutput(text, format, imgPath));
+      log(`✔ ${i + 1}/${total} সেভ: ${fileName}`);
+
+      setProgress("ছবি", i + 1, total, 0, `${i + 1} ছবি সম্পন্ন`);
     }
+    finishProgress("ছবি", total);
     log("🎉 সম্পন্ন!");
   } catch (err) {
     log(`❌ ${err}`);
     console.error(err);
   } finally {
+    if (worker) { try { await worker.terminate(); } catch (_) {} }
     setBusy(false);
   }
 });
