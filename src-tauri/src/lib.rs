@@ -1,55 +1,250 @@
-use hayro::hayro_interpret::InterpreterSettings;
-use hayro::hayro_syntax::Pdf;
-use hayro::{render, PixmapSettings, RenderCache, RenderSettings};
-use base64::{engine::general_purpose, Engine as _};
-use std::fs;
+name: Build and Sign Android APK
 
-// ১. পেজ সংখ্যা জানার জন্য
-#[tauri::command]
-async fn get_pdf_page_count(pdf_path: String) -> Result<usize, String> {
-    let bytes = fs::read(&pdf_path).map_err(|e| e.to_string())?;
-    let pdf = Pdf::new(bytes).map_err(|e| format!("{:?}", e))?;
-    Ok(pdf.pages().len())
-}
+on:
+  push:
+    branches: [main]
+  workflow_dispatch:
 
-// ২. নির্দিষ্ট একটি পেজ রেন্ডার করার জন্য
-#[tauri::command]
-async fn render_pdf_page(pdf_path: String, page_index: usize) -> Result<String, String> {
-    let bytes = fs::read(&pdf_path).map_err(|e| e.to_string())?;
-    let pdf = Pdf::new(bytes).map_err(|e| format!("{:?}", e))?;
+permissions:
+  contents: read
 
-    let page = pdf.pages().get(page_index)
-        .ok_or_else(|| "Page index out of bounds".to_string())?;
+jobs:
+  build:
+    name: Build Signed Android APK
+    runs-on: ubuntu-latest
 
-    let cache = RenderCache::new();
-    let interpreter_settings = InterpreterSettings::default();
-    let render_settings = RenderSettings::default();
-    let pixmap_settings = PixmapSettings::default();
+    steps:
+      # ==========================================
+      # 1. Checkout
+      # ==========================================
+      - name: Checkout
+        uses: actions/checkout@v4
 
-    let pixmap = render(
-        &page,
-        &cache,
-        &interpreter_settings,
-        &render_settings,
-        &pixmap_settings,
-    );
-    
-    let png_bytes = pixmap.into_png().map_err(|e| format!("{:?}", e))?;
-    
-    // PNG কে base64 এ এনকোড করে রিটার্ন করি
-    Ok(general_purpose::STANDARD.encode(&png_bytes))
-}
+      # ==========================================
+      # 2. Setup Node
+      # ==========================================
+      - name: Setup Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: '20'
 
-#[cfg_attr(mobile, tauri::mobile_entry_point)]
-pub fn run() {
-    tauri::Builder::default()
-        .plugin(tauri_plugin_scoped_storage::init())
-        .plugin(tauri_plugin_dialog::init())
-        .plugin(tauri_plugin_fs::init())
-        .invoke_handler(tauri::generate_handler![
-            get_pdf_page_count,
-            render_pdf_page
-        ])
-        .run(tauri::generate_context!())
-        .expect("error while running tauri application");
-}
+      # ==========================================
+      # 3. Setup Rust
+      # ==========================================
+      - name: Setup Rust
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: aarch64-linux-android,armv7-linux-androideabi,i686-linux-android,x86_64-linux-android
+
+      # ==========================================
+      # 4. Setup Java
+      # ==========================================
+      - name: Setup Java
+        uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '17'
+
+      # ==========================================
+      # 5. Setup Android SDK
+      # ==========================================
+      - name: Setup Android SDK
+        uses: android-actions/setup-android@v4
+        with:
+          cmdline-tools-version: 12266719
+
+      # ==========================================
+      # 6. Install NDK
+      # ==========================================
+      - name: Install NDK
+        run: |
+          yes | $ANDROID_HOME/cmdline-tools/latest/bin/sdkmanager \
+            --sdk_root=$ANDROID_HOME \
+            "ndk;26.1.10909125" \
+            "platforms;android-34" \
+            "build-tools;34.0.0"
+          echo "NDK_HOME=$ANDROID_HOME/ndk/26.1.10909125" >> $GITHUB_ENV
+          echo "ANDROID_NDK_HOME=$ANDROID_HOME/ndk/26.1.10909125" >> $GITHUB_ENV
+
+      # ==========================================
+      # 7. Install Dependencies
+      # ==========================================
+      - name: Install dependencies
+        run: npm install
+
+      # ==========================================
+      # 8. Verify tauri CLI
+      # ==========================================
+      - name: Verify tauri CLI
+        run: |
+          ls -la node_modules/.bin/tauri
+          npx tauri --version
+          cat package.json | grep -A3 '"scripts"'
+
+      # ==========================================
+      # 9. Decode and Verify Keystore
+      # ==========================================
+      - name: Decode and Verify Keystore
+        env:
+          KEYSTORE_BASE64: ${{ secrets.ANDROID_KEYSTORE_BASE64 }}
+          KEYSTORE_PASSWORD: ${{ secrets.ANDROID_KEYSTORE_PASSWORD }}
+          KEY_ALIAS: ${{ secrets.ANDROID_KEY_ALIAS }}
+        run: |
+          set -e
+          test -n "$KEYSTORE_BASE64" || { echo "ERROR: ANDROID_KEYSTORE_BASE64 missing"; exit 1; }
+          test -n "$KEYSTORE_PASSWORD" || { echo "ERROR: ANDROID_KEYSTORE_PASSWORD missing"; exit 1; }
+          test -n "$KEY_ALIAS" || { echo "ERROR: ANDROID_KEY_ALIAS missing"; exit 1; }
+
+          printf '%s' "$KEYSTORE_BASE64" | base64 --decode > "$RUNNER_TEMP/release-key.p12"
+          chmod 600 "$RUNNER_TEMP/release-key.p12"
+
+          echo "Verifying PKCS12 Keystore..."
+          keytool -list \
+            -keystore "$RUNNER_TEMP/release-key.p12" \
+            -storetype PKCS12 \
+            -storepass "$KEYSTORE_PASSWORD" \
+            -alias "$KEY_ALIAS"
+          echo "Keystore verification successful!"
+
+      # ==========================================
+      # 10. Init Android project
+      # ==========================================
+      - name: Init Android project
+        run: |
+          ls -la src-tauri/tauri.conf.json
+          npx tauri android init --ci
+
+      # ==========================================
+      # 10.5 Patch Android (documentfile + proguard + largeHeap)
+      # ==========================================
+      - name: Patch Android project (documentfile + proguard)
+        run: |
+          set -e
+          GRADLE=src-tauri/gen/android/app/build.gradle.kts
+          PRO=src-tauri/gen/android/app/proguard-rules.pro
+
+          test -f "$GRADLE" || { echo "ERROR: $GRADLE not found"; exit 1; }
+
+          # 1) androidx.documentfile dependency যোগ
+          sed -i '/^dependencies {/a\    implementation("androidx.documentfile:documentfile:1.0.1")' "$GRADLE"
+
+          # 2) ProGuard / R8 keep rules যোগ
+          touch "$PRO"
+          cat >> "$PRO" << 'EOF'
+
+          # ---- AQIS OCR patch ----
+          -keep class androidx.documentfile.** { *; }
+          -keep class app.tauri.** { *; }
+          -keep class * extends app.tauri.plugin.Plugin { *; }
+          -keep @app.tauri.annotation.TauriPlugin class * { *; }
+          -keepclassmembers class * {
+              @app.tauri.annotation.Command *;
+          }
+          EOF
+
+          # 3) বড় ছবির জন্য heap বাড়ানো (largeHeap)
+          MANIFEST=src-tauri/gen/android/app/src/main/AndroidManifest.xml
+          sed -i '0,/<application/s//<application android:largeHeap="true"/' "$MANIFEST"
+          grep -n "largeHeap" "$MANIFEST" || { echo "ERROR: largeHeap not added"; exit 1; }
+
+          echo "=== Verify patch ==="
+          grep -n "documentfile" "$GRADLE" || { echo "ERROR: dependency not added"; exit 1; }
+          echo "--- proguard-rules.pro ---"
+          cat "$PRO"
+
+      # ==========================================
+      # 11. Build Android APK
+      # ==========================================
+      - name: Build APK
+        run: |
+          npx tauri android build --apk --verbose
+
+          echo "=== Checking dist ==="
+          ls -la dist/ || echo "NO DIST FOLDER!"
+          ls -la dist/assets/ || echo "NO ASSETS!"
+          echo "=== dist/index.html ==="
+          cat dist/index.html || echo "NO INDEX!"
+
+      # ==========================================
+      # 12. Locate, Align and Sign APK
+      # ==========================================
+      - name: Sign APK
+        env:
+          KEYSTORE_PASSWORD: ${{ secrets.ANDROID_KEYSTORE_PASSWORD }}
+          KEY_PASSWORD: ${{ secrets.ANDROID_KEY_PASSWORD }}
+          KEY_ALIAS: ${{ secrets.ANDROID_KEY_ALIAS }}
+        run: |
+          set -e
+          APK_DIR="src-tauri/gen/android/app/build/outputs/apk/universal/release"
+          if [ ! -d "$APK_DIR" ]; then
+            echo "Universal APK directory not found."
+            find src-tauri/gen/android/app/build/outputs/apk -type f -name "*.apk" || true
+            exit 1
+          fi
+          cd "$APK_DIR"
+          echo "Available APK files:"
+          ls -lh *.apk || true
+
+          UNSIGNED_APK=""
+          if [ -f "app-universal-release-unsigned.apk" ]; then
+            UNSIGNED_APK="app-universal-release-unsigned.apk"
+          elif [ -f "app-universal-release.apk" ]; then
+            UNSIGNED_APK="app-universal-release.apk"
+          else
+            echo "No expected release APK found."
+            find . -maxdepth 1 -name "*.apk"
+            exit 1
+          fi
+          echo "Using APK: $UNSIGNED_APK"
+
+          BUILD_TOOLS="$ANDROID_HOME/build-tools/34.0.0"
+
+          echo "Running Zipalign..."
+          "$BUILD_TOOLS/zipalign" -v -p 4 \
+            "$UNSIGNED_APK" \
+            app-universal-release-aligned.apk
+
+          printf '%s\n' "$KEYSTORE_PASSWORD" > "$RUNNER_TEMP/ks-pass.txt"
+          printf '%s\n' "$KEY_PASSWORD" > "$RUNNER_TEMP/key-pass.txt"
+          chmod 600 "$RUNNER_TEMP/ks-pass.txt" "$RUNNER_TEMP/key-pass.txt"
+
+          echo "Signing APK..."
+          "$BUILD_TOOLS/apksigner" sign \
+            --ks "$RUNNER_TEMP/release-key.p12" \
+            --ks-type PKCS12 \
+            --ks-pass "file:$RUNNER_TEMP/ks-pass.txt" \
+            --key-pass "file:$RUNNER_TEMP/key-pass.txt" \
+            --ks-key-alias "$KEY_ALIAS" \
+            --out app-universal-release-signed.apk \
+            app-universal-release-aligned.apk
+
+          echo "Verifying APK Signature..."
+          "$BUILD_TOOLS/apksigner" verify --verbose --print-certs app-universal-release-signed.apk
+
+          echo "=================================="
+          echo "APK SIGNING SUCCESSFUL"
+          echo "=================================="
+          ls -lh app-universal-release-signed.apk
+
+          rm -f "$RUNNER_TEMP/ks-pass.txt" "$RUNNER_TEMP/key-pass.txt"
+
+      # ==========================================
+      # 13. Upload Signed APK
+      # ==========================================
+      - name: Upload Signed APK
+        uses: actions/upload-artifact@v4
+        with:
+          name: pdfconverter-signed-apk
+          path: src-tauri/gen/android/app/build/outputs/apk/universal/release/app-universal-release-signed.apk
+          if-no-files-found: error
+          retention-days: 30
+
+      # ==========================================
+      # 14. Cleanup Keystore
+      # ==========================================
+      - name: Cleanup Keystore
+        if: always()
+        run: |
+          rm -f "$RUNNER_TEMP/release-key.p12"
+          rm -f "$RUNNER_TEMP/ks-pass.txt"
+          rm -f "$RUNNER_TEMP/key-pass.txt"
