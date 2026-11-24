@@ -122,18 +122,26 @@ function formatOutput(text, format, sourcePath) {
   return text;
 }
 
+// "best" মডেল (বেশি নির্ভুল, তবে ডাউনলোড বড়)। সমস্যা হলে "" করলে ডিফল্ট মডেল চলবে।
+const TESS_LANG_PATH = "https://tessdata.projectnaptha.com/4.0.0_best";
+
 // একটাই worker বানাই; logger দিয়ে OCR-এর % আপডেট হয়
 // ctx = { kind, index, total, base } — base = OCR শুরুর আগে কত অংশ শেষ (0..1)
 async function makeWorker(langs, ctx) {
   const Tesseract = (await import("tesseract.js")).default;
-  return Tesseract.createWorker(langs, 1, {
+  const opts = {
     logger: (m) => {
       if (m.status === "recognizing text") {
         const frac = ctx.base + (1 - ctx.base) * m.progress;
         setProgress(ctx.kind, ctx.index, ctx.total, frac, "OCR চলছে...");
       }
     },
-  });
+  };
+  if (TESS_LANG_PATH) opts.langPath = TESS_LANG_PATH;
+  const worker = await Tesseract.createWorker(langs, 1, opts);
+  // টেবিলের কলামের ফাঁক ধরে রাখে
+  await worker.setParameters({ preserve_interword_spaces: "1" });
+  return worker;
 }
 
 // ================= PDF =================
@@ -175,25 +183,30 @@ btnPdf.addEventListener("click", async () => {
     for (let i = 0; i < pageCount; i++) {
       ctx.index = i;
 
-      setProgress("পেজ", i, pageCount, 0, "রেন্ডার হচ্ছে...");
-      let base64Data = await invoke("render_pdf_page", { pdfPath: localPdfPath, pageIndex: i });
-
-      const binaryString = atob(base64Data);
-      base64Data = null;
-      let bytes = new Uint8Array(binaryString.length);
-      for (let j = 0; j < binaryString.length; j++) {
-        bytes[j] = binaryString.charCodeAt(j);
-      }
+      setProgress("পেজ", i, pageCount, 0, "রেন্ডার হচ্ছে (৫০০ DPI)...");
+      // Rust দুটো ফাইল cache-এ লেখে: fullPath (৫০০ DPI), ocrPath (৩০০ DPI)
+      const res = await invoke("render_pdf_page", {
+        pdfPath: localPdfPath,
+        pageIndex: i,
+        outDir: cacheDir,
+      });
 
       const imgFileName = `${i + 1}.png`;
       const imgPath = imgFileName;
       setProgress("পেজ", i, pageCount, 0.05, "ছবি সেভ হচ্ছে...");
-      await writeFile(folder.id, imgPath, bytes, { mimeType: "image/png" });
+      let fullBytes = await readFile(res.fullPath);
+      await writeFile(folder.id, imgPath, fullBytes, { mimeType: "image/png" });
+      fullBytes = null;
       log(`✔ ছবি ${i + 1}/${pageCount} সেভ: ${imgPath}`);
 
-      // OCR (logger % আপডেট করবে)
-      const { data: { text } } = await worker.recognize(new Blob([bytes], { type: "image/png" }));
-      bytes = null;
+      // OCR (৩০০ DPI কপি; logger % আপডেট করবে)
+      let ocrBytes = await readFile(res.ocrPath);
+      const { data: { text } } = await worker.recognize(new Blob([ocrBytes], { type: "image/png" }));
+      ocrBytes = null;
+
+      // অস্থায়ী ফাইল মুছি
+      try { await remove(res.fullPath); } catch (_) {}
+      try { await remove(res.ocrPath); } catch (_) {}
 
       const txtPath = `${i + 1}.${format}`;
       await writeTextFile(folder.id, txtPath, formatOutput(text, format, imgPath));
@@ -264,4 +277,3 @@ btnImg.addEventListener("click", async () => {
 });
 
 log("✅ App ready");
-
