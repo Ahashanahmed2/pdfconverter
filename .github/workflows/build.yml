@@ -117,8 +117,16 @@ jobs:
       # ==========================================
       # 11. Build Android APK
       # ==========================================
+      
       - name: Build APK
-        run: npx tauri android build --apk --verbose
+        run: |
+          npx tauri android build --apk --verbose
+    
+          echo "=== Checking dist ==="
+          ls -la dist/ || echo "NO DIST FOLDER!"
+          ls -la dist/assets/ || echo "NO ASSETS!"
+          echo "=== dist/index.html ==="
+          cat dist/index.html || echo "NO INDEX!"
 
       # ==========================================
       # 12. Locate, Align and Sign APK
