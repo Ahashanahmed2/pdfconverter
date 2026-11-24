@@ -107,6 +107,15 @@ function finishProgress(kind, total) {
   progressSub.textContent = "";
 }
 
+// content:// URI থেকে ফাইলের নাম (এক্সটেনশন ছাড়া) বের করি
+function baseNameOf(p, fallback) {
+  let s = p;
+  try { s = decodeURIComponent(p); } catch (_) {}
+  s = s.split(/[/\\:]/).pop().replace(/\.[^.]+$/, "").replace(/[\\/:*?"<>|]/g, "_").trim();
+  if (!s || /^\d+$/.test(s)) return fallback;
+  return s;
+}
+
 function formatOutput(text, format, sourcePath) {
   if (format === "json") return JSON.stringify({ source: sourcePath, text: text.trim() }, null, 2);
   if (format === "md") return `# OCR\n\n**Source:** \`${sourcePath}\`\n\n${text.trim()}`;
@@ -147,8 +156,6 @@ btnPdf.addEventListener("click", async () => {
     statusEl.textContent = "PDF প্রসেসিং...";
     progressBox.style.display = "none";
 
-    const baseName = selected.split(/[/\\]/).pop().replace(/\.pdf$/i, "");
-
     // content:// URI থেকে পড়ে cache-এ কপি
     log("PDF কপি করা হচ্ছে...");
     const pdfBytes = await readFile(selected);
@@ -179,16 +186,16 @@ btnPdf.addEventListener("click", async () => {
       }
 
       const imgFileName = `${i + 1}.png`;
-      const imgPath = `${baseName}/${imgFileName}`;
+      const imgPath = imgFileName;
       setProgress("পেজ", i, pageCount, 0.05, "ছবি সেভ হচ্ছে...");
-      await writeFile(folder.id, imgPath, bytes, { recursive: true, mimeType: "image/png" });
+      await writeFile(folder.id, imgPath, bytes, { mimeType: "image/png" });
       log(`✔ ছবি ${i + 1}/${pageCount} সেভ: ${imgPath}`);
 
       // OCR (logger % আপডেট করবে)
       const { data: { text } } = await worker.recognize(new Blob([bytes], { type: "image/png" }));
       bytes = null;
 
-      const txtPath = `${baseName}/${i + 1}.${format}`;
+      const txtPath = `${i + 1}.${format}`;
       await writeTextFile(folder.id, txtPath, formatOutput(text, format, imgPath));
       log(`✔ টেক্সট ${i + 1}/${pageCount} সেভ: ${txtPath}`);
 
@@ -233,7 +240,7 @@ btnImg.addEventListener("click", async () => {
     for (let i = 0; i < total; i++) {
       ctx.index = i;
       const imgPath = selected[i];
-      const fileName = imgPath.split(/[/\\]/).pop().replace(/\.\w+$/, `.${format}`);
+      const fileName = `${baseNameOf(imgPath, `image_${i + 1}`)}.${format}`;
 
       setProgress("ছবি", i, total, 0, "ছবি পড়া হচ্ছে...");
       const bytes = await readFile(imgPath);
@@ -257,3 +264,4 @@ btnImg.addEventListener("click", async () => {
 });
 
 log("✅ App ready");
+
