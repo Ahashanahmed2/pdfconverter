@@ -113,37 +113,43 @@ btnPdf.addEventListener("click", async () => {
 
     const baseName = selected.split(/[/\\]/).pop().replace(/\.pdf$/i, "");
     
-    // Rust দিয়ে PDF → PNG বাইট। এখানে আমরা সরাসরি Rust কে পাথ না দিয়ে বাইট চাইবো
-    // (নিচে Rust কোডে pdf_to_images_bytes ফাংশন যোগ করতে হবে)
-    log(`PDF পেজগুলো ছবিতে রূপান্তর হচ্ছে...`);
-    const pages = await invoke("pdf_to_images_bytes", { pdfPath: selected });
-    log(`মোট ${pages.length} পেজ পাওয়া গেছে।`);
+    // ৩. পেজ সংখ্যা বের করি
+    log(`PDF পেজ সংখ্যা বের করা হচ্ছে...`);
+    const pageCount = await invoke("get_pdf_page_count", { pdfPath: selected });
+    log(`মোট ${pageCount} পেজ পাওয়া গেছে।`);
 
-    for (let i = 0; i < pages.length; i++) {
-      const base64Data = pages[i];
+    const Tesseract = (await import("tesseract.js")).default;
+
+    // ৪. প্রতিটি পেজ একে একে রেন্ডার এবং OCR করি
+    for (let i = 0; i < pageCount; i++) {
+      log(`[পেজ ${i + 1}/${pageCount}] রেন্ডার হচ্ছে...`);
+      
+      // Rust থেকে এই পেজের base64 PNG আসবে
+      const base64Data = await invoke("render_pdf_page", { pdfPath: selected, pageIndex: i });
+      
       const imgFileName = `${i + 1}.png`;
       const imgPath = `${baseName}/${imgFileName}`;
       
-      // PNG বাইট scoped-storage দিয়ে সেভ
+      // PNG ফাইল scoped-storage দিয়ে সেভ করি
       const binaryString = atob(base64Data);
       const bytes = new Uint8Array(binaryString.length);
       for (let j = 0; j < binaryString.length; j++) {
         bytes[j] = binaryString.charCodeAt(j);
       }
       await writeFile(folder.id, imgPath, bytes, { recursive: true, mimeType: "image/png" });
+      log(`✔ ছবি সেভ: ${imgPath}`);
+
+      log(`[পেজ ${i + 1}/${pageCount}] OCR চলছে...`);
       
-      // তারপর সেই ছবি OCR
-      log(`[${i + 1}/${pages.length}] OCR চলছে...`);
-      // OCR এর জন্য data URL ব্যবহার করি (যেহেতু আমরা ফাইল পাথ দিতে পারব না)
+      // OCR এর জন্য data URL ব্যবহার করি
       const dataUrl = `data:image/png;base64,${base64Data}`;
-      const Tesseract = (await import("tesseract.js")).default;
       const { data: { text } } = await Tesseract.recognize(dataUrl, langs);
       
       const txtName = `${i + 1}.${format}`;
       const txtPath = `${baseName}/${txtName}`;
       const formatted = formatOutput(text, format, `${baseName}/${imgFileName}`);
       await writeTextFile(folder.id, txtPath, formatted);
-      log(`✔ সেভ: ${txtPath}`);
+      log(`✔ টেক্সট সেভ: ${txtPath}`);
     }
     log("🎉 সম্পন্ন!");
   } catch (err) {
