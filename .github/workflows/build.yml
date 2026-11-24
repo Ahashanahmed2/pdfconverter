@@ -115,7 +115,7 @@ jobs:
           npx tauri android init --ci
 
       # ==========================================
-      # 10.5 Patch Android (documentfile + proguard)
+      # 10.5 Patch Android (documentfile + proguard + largeHeap)
       # ==========================================
       - name: Patch Android project (documentfile + proguard)
         run: |
@@ -141,6 +141,11 @@ jobs:
               @app.tauri.annotation.Command *;
           }
           EOF
+
+          # 3) বড় ছবির জন্য heap বাড়ানো (largeHeap)
+          MANIFEST=src-tauri/gen/android/app/src/main/AndroidManifest.xml
+          sed -i '0,/<application/s//<application android:largeHeap="true"/' "$MANIFEST"
+          grep -n "largeHeap" "$MANIFEST" || { echo "ERROR: largeHeap not added"; exit 1; }
 
           echo "=== Verify patch ==="
           grep -n "documentfile" "$GRADLE" || { echo "ERROR: dependency not added"; exit 1; }
