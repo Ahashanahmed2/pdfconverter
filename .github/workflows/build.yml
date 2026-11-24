@@ -107,7 +107,7 @@ jobs:
           echo "Keystore verification successful!"
 
       # ==========================================
-      # 10. Init Android project (একবারই)
+      # 10. Init Android project
       # ==========================================
       - name: Init Android project
         run: |
@@ -115,13 +115,45 @@ jobs:
           npx tauri android init --ci
 
       # ==========================================
+      # 10.5 Patch Android (documentfile + proguard)
+      # ==========================================
+      - name: Patch Android project (documentfile + proguard)
+        run: |
+          set -e
+          GRADLE=src-tauri/gen/android/app/build.gradle.kts
+          PRO=src-tauri/gen/android/app/proguard-rules.pro
+
+          test -f "$GRADLE" || { echo "ERROR: $GRADLE not found"; exit 1; }
+
+          # 1) androidx.documentfile dependency যোগ
+          sed -i '/^dependencies {/a\    implementation("androidx.documentfile:documentfile:1.0.1")' "$GRADLE"
+
+          # 2) ProGuard / R8 keep rules যোগ
+          touch "$PRO"
+          cat >> "$PRO" << 'EOF'
+
+          # ---- AQIS OCR patch ----
+          -keep class androidx.documentfile.** { *; }
+          -keep class app.tauri.** { *; }
+          -keep class * extends app.tauri.plugin.Plugin { *; }
+          -keep @app.tauri.annotation.TauriPlugin class * { *; }
+          -keepclassmembers class * {
+              @app.tauri.annotation.Command *;
+          }
+          EOF
+
+          echo "=== Verify patch ==="
+          grep -n "documentfile" "$GRADLE" || { echo "ERROR: dependency not added"; exit 1; }
+          echo "--- proguard-rules.pro ---"
+          cat "$PRO"
+
+      # ==========================================
       # 11. Build Android APK
       # ==========================================
-      
       - name: Build APK
         run: |
           npx tauri android build --apk --verbose
-    
+
           echo "=== Checking dist ==="
           ls -la dist/ || echo "NO DIST FOLDER!"
           ls -la dist/assets/ || echo "NO ASSETS!"
