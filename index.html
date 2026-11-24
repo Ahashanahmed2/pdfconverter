@@ -2,11 +2,20 @@
 <html lang="en">
 <head>
   <meta charset="UTF-8" />
-  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0, user-scalable=no" />
   <title>AQIS OCR</title>
+  <style>
+    * { box-sizing: border-box; }
+    body { margin: 0; background: #f8fafc; color: #0f172a; font-family: system-ui, sans-serif; }
+    #app { min-height: 100vh; }
+  </style>
 </head>
-<body style="margin: 0; background: #f8fafc; color: #0f172a;">
-  <div id="app"></div>
-  <script type="module" src="/src/main.js"></script>
+<body>
+  <div id="app">
+    <div style="padding: 20px; color: #2563eb; font-size: 18px;">
+      ✅ HTML LOADED — JS লোড হচ্ছে...
+    </div>
+  </div>
+  <script type="module" src="./src/main.js"></script>
 </body>
 </html>
