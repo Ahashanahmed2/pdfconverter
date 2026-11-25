@@ -153,6 +153,55 @@ jobs:
           cat "$PRO"
 
       # ==========================================
+      # 10.6 Install Kotlin updater plugin (in-app APK update)
+      # ==========================================
+      - name: Install Kotlin updater plugin
+        run: |
+          set -e
+          APP=src-tauri/gen/android/app
+          MAIN=$(find $APP/src/main/java -name MainActivity.kt | head -n1)
+          test -n "$MAIN" || { echo "ERROR: MainActivity.kt not found"; exit 1; }
+          KT_DIR=$(dirname "$MAIN")
+          PKG=$(grep -m1 '^package ' "$MAIN" | awk '{print $2}')
+          echo "Android package: $PKG"
+          test "$PKG" = "com.aqis.ocr" || { echo "ERROR: package is $PKG, expected com.aqis.ocr"; exit 1; }
+
+          cp src-tauri/android-src/UpdaterPlugin.kt "$KT_DIR/"
+          cp src-tauri/android-src/UpdateFileProvider.kt "$KT_DIR/"
+          mkdir -p $APP/src/main/res/xml
+          cp src-tauri/android-src/update_file_paths.xml $APP/src/main/res/xml/
+
+          # ProGuard keep
+          echo "-keep class com.aqis.ocr.** { *; }" >> $APP/proguard-rules.pro
+
+          # Manifest: install permission + FileProvider
+          PKG="$PKG" python3 - << 'PY'
+          import os
+          p = "src-tauri/gen/android/app/src/main/AndroidManifest.xml"
+          s = open(p, encoding="utf-8").read()
+          pkg = os.environ["PKG"]
+          if "updatefileprovider" not in s:
+              perm = '    <uses-permission android:name="android.permission.REQUEST_INSTALL_PACKAGES" />\n'
+              s = s.replace("<application", perm + "    <application", 1)
+              prov = (
+                  '        <provider\n'
+                  '            android:name="' + pkg + '.UpdateFileProvider"\n'
+                  '            android:authorities="${applicationId}.updatefileprovider"\n'
+                  '            android:exported="false"\n'
+                  '            android:grantUriPermissions="true">\n'
+                  '            <meta-data android:name="android.support.FILE_PROVIDER_PATHS"'
+                  ' android:resource="@xml/update_file_paths" />\n'
+                  '        </provider>\n'
+              )
+              s = s.replace("</application>", prov + "    </application>", 1)
+              open(p, "w", encoding="utf-8").write(s)
+          PY
+
+          echo "=== Verify manifest ==="
+          grep -n "REQUEST_INSTALL_PACKAGES\|updatefileprovider\|UpdateFileProvider" $APP/src/main/AndroidManifest.xml
+          ls -la "$KT_DIR"
+
+      # ==========================================
       # 11. Build Android APK
       # ==========================================
       - name: Build APK
