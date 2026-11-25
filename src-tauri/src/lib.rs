@@ -61,10 +61,12 @@ mod updater {
         cmd: String,
         payload: Option<Value>,
     ) -> Result<Value, String> {
-        const ALLOWED: [&str; 6] = [
+        const ALLOWED: [&str; 8] = [
             "init",
             "showBanner",
             "hideBanner",
+            "showMrec",
+            "hideMrec",
             "loadInterstitial",
             "showInterstitial",
             "privacyOptions",
