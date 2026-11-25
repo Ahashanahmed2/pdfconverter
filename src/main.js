@@ -14,6 +14,8 @@ window.addEventListener("unhandledrejection", (e) => {
 
 // ---- Imports ----
 import { invoke } from "@tauri-apps/api/core";
+import { getVersion } from "@tauri-apps/api/app";
+import { openUrl } from "@tauri-apps/plugin-opener";
 import { open } from "@tauri-apps/plugin-dialog";
 import { readFile, writeFile as fsWriteFile, remove } from "@tauri-apps/plugin-fs";
 import { appCacheDir, join } from "@tauri-apps/api/path";
@@ -276,4 +278,192 @@ btnImg.addEventListener("click", async () => {
   }
 });
 
+// ================= আপডেট চেক =================
+// Hugging Face-এর JSON ফাইল: { "app_version": "v1.0.1", "update_notes": "...", "apk_url": "https://..." }
+// ঐচ্ছিক: "force": true দিলে "পরে" বাটন থাকবে না।
+const UPDATE_JSON_URL = "https://huggingface.co/datasets/ahashanahmed/tafsir/resolve/main/pdfconverter";
+const FALLBACK_VERSION = "1.0.0";
+
+function parseVer(v) {
+  return String(v).trim().replace(/^v/i, "").split(".").map((n) => parseInt(n, 10) || 0);
+}
+
+function isNewer(remote, local) {
+  const a = parseVer(remote);
+  const b = parseVer(local);
+  for (let i = 0; i < Math.max(a.length, b.length); i++) {
+    const x = a[i] || 0;
+    const y = b[i] || 0;
+    if (x > y) return true;
+    if (x < y) return false;
+  }
+  return false;
+}
+
+function showUpdateModal(info, currentVer) {
+  if (document.querySelector("#update-modal")) return;
+
+  const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
+  const mb = (n) => (n / 1048576).toFixed(1);
+
+  const overlay = document.createElement("div");
+  overlay.id = "update-modal";
+  overlay.style.cssText =
+    "position:fixed; inset:0; background:rgba(15,23,42,.6); z-index:9999; display:flex; align-items:center; justify-content:center; padding:20px;";
+
+  const card = document.createElement("div");
+  card.style.cssText =
+    "background:#fff; border-radius:16px; padding:20px; width:100%; max-width:380px; box-shadow:0 10px 40px rgba(0,0,0,.3);";
+
+  const title = document.createElement("div");
+  title.textContent = "🔔 নতুন আপডেট এসেছে";
+  title.style.cssText = "font-size:1.15rem; font-weight:700; margin-bottom:6px;";
+
+  const ver = document.createElement("div");
+  ver.textContent = `বর্তমান: v${String(currentVer).replace(/^v/i, "")}  →  নতুন: v${String(info.app_version).replace(/^v/i, "")}`;
+  ver.style.cssText = "font-size:.85rem; color:#64748b; margin-bottom:12px;";
+
+  const notes = document.createElement("div");
+  notes.textContent = info.update_notes || "";
+  notes.style.cssText =
+    "font-size:.95rem; margin-bottom:16px; white-space:pre-wrap; max-height:160px; overflow-y:auto;";
+
+  // ডাউনলোড প্রগ্রেস
+  const progWrap = document.createElement("div");
+  progWrap.style.cssText = "display:none; margin-bottom:12px;";
+  const progTop = document.createElement("div");
+  progTop.style.cssText = "display:flex; justify-content:space-between; font-size:.85rem; font-weight:600; margin-bottom:6px;";
+  const progLabel = document.createElement("span");
+  const progPct = document.createElement("span");
+  progTop.append(progLabel, progPct);
+  const track = document.createElement("div");
+  track.style.cssText = "height:10px; background:#e2e8f0; border-radius:999px; overflow:hidden;";
+  const fill = document.createElement("div");
+  fill.style.cssText = "height:100%; width:0%; background:#2563eb; transition:width .25s;";
+  track.appendChild(fill);
+  progWrap.append(progTop, track);
+
+  const msg = document.createElement("div");
+  msg.style.cssText = "font-size:.8rem; color:#64748b; margin-bottom:12px; display:none;";
+  const setMsg = (text, isError) => {
+    msg.style.display = "block";
+    msg.style.color = isError ? "#dc2626" : "#64748b";
+    msg.textContent = text;
+  };
+
+  const row = document.createElement("div");
+  row.style.cssText = "display:flex; gap:10px;";
+
+  const btnUpdate = document.createElement("button");
+  btnUpdate.textContent = "আপডেট করুন";
+  btnUpdate.style.cssText =
+    "flex:1; padding:12px; background:#2563eb; color:#fff; border:none; border-radius:8px; font-weight:600;";
+  row.appendChild(btnUpdate);
+
+  const btnBrowser = document.createElement("button");
+  btnBrowser.textContent = "ব্রাউজারে ডাউনলোড";
+  btnBrowser.style.cssText =
+    "display:none; padding:12px; background:#e2e8f0; color:#0f172a; border:none; border-radius:8px; font-weight:600; font-size:.8rem;";
+  btnBrowser.addEventListener("click", async () => {
+    try { await openUrl(info.apk_url); } catch (e) { setMsg(`❌ ${e}`, true); }
+  });
+  row.appendChild(btnBrowser);
+
+  if (!info.force) {
+    const btnLater = document.createElement("button");
+    btnLater.textContent = "পরে";
+    btnLater.style.cssText =
+      "padding:12px 18px; background:#e2e8f0; color:#0f172a; border:none; border-radius:8px; font-weight:600;";
+    btnLater.addEventListener("click", () => overlay.remove());
+    row.appendChild(btnLater);
+  }
+
+  let downloaded = false; // ডাউনলোড শেষ হলে true
+
+  async function doInstall() {
+    const r = await invoke("update_install");
+    if (r && r.needsPermission) {
+      setMsg("সেটিংসে “এই উৎস থেকে অনুমতি দিন” চালু করে অ্যাপে ফিরে এসে আবার “ইনস্টল করুন” চাপুন।", false);
+      btnUpdate.disabled = false;
+      btnUpdate.textContent = "ইনস্টল করুন";
+      return;
+    }
+    setMsg("ইনস্টলার খোলা হয়েছে। “ইনস্টল/আপডেট” চাপুন।", false);
+    btnUpdate.disabled = false;
+    btnUpdate.textContent = "আবার ইনস্টল করুন";
+  }
+
+  async function doDownload() {
+    if (!/^https:\/\//i.test(info.apk_url)) throw new Error("অবৈধ APK লিংক");
+    progWrap.style.display = "block";
+    progLabel.textContent = "ডাউনলোড হচ্ছে...";
+    progPct.textContent = "0%";
+    fill.style.width = "0%";
+
+    await invoke("update_download", { url: info.apk_url });
+
+    // প্রগ্রেস পোলিং
+    while (true) {
+      const p = await invoke("update_progress");
+      if (p.state === "error") throw new Error(p.error || "ডাউনলোড ব্যর্থ");
+      if (p.total > 0) {
+        const pct = Math.min(100, Math.round((p.downloaded / p.total) * 100));
+        fill.style.width = `${pct}%`;
+        progPct.textContent = `${pct}%`;
+        progLabel.textContent = `${mb(p.downloaded)} / ${mb(p.total)} MB`;
+      } else {
+        progLabel.textContent = `${mb(p.downloaded)} MB`;
+        progPct.textContent = "";
+      }
+      if (p.state === "done") break;
+      await sleep(400);
+    }
+    fill.style.width = "100%";
+    progPct.textContent = "100%";
+    progLabel.textContent = "ডাউনলোড সম্পন্ন";
+    downloaded = true;
+  }
+
+  btnUpdate.addEventListener("click", async () => {
+    btnUpdate.disabled = true;
+    btnBrowser.style.display = "none";
+    msg.style.display = "none";
+    try {
+      if (!downloaded) {
+        btnUpdate.textContent = "ডাউনলোড হচ্ছে...";
+        await doDownload();
+      }
+      btnUpdate.textContent = "ইনস্টল হচ্ছে...";
+      await doInstall();
+    } catch (err) {
+      setMsg(`❌ ${err}`, true);
+      btnUpdate.disabled = false;
+      btnUpdate.textContent = downloaded ? "আবার চেষ্টা করুন" : "আবার ডাউনলোড";
+      btnBrowser.style.display = "block"; // ব্যর্থ হলে ব্রাউজার বিকল্প
+    }
+  });
+
+  card.append(title, ver, notes, progWrap, msg, row);
+  overlay.appendChild(card);
+  document.body.appendChild(overlay);
+}
+
+async function checkForUpdate() {
+  try {
+    let current = FALLBACK_VERSION;
+    try { current = await getVersion(); } catch (_) {}
+
+    const res = await fetch(`${UPDATE_JSON_URL}?t=${Date.now()}`, { cache: "no-store" });
+    if (!res.ok) return;
+    const info = await res.json();
+    if (!info.app_version || !info.apk_url) return;
+
+    if (isNewer(info.app_version, current)) showUpdateModal(info, current);
+  } catch (err) {
+    // নেটওয়ার্ক না থাকলে চুপচাপ বাদ দিই
+    console.warn("Update check failed:", err);
+  }
+}
+
 log("✅ App ready");
+checkForUpdate();
