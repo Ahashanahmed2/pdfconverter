@@ -221,6 +221,21 @@ jobs:
           sed -i '/^dependencies {/a\    implementation("com.google.android.gms:play-services-ads:24.0.0")' "$GRADLE"
           sed -i '/^dependencies {/a\    implementation("com.google.android.ump:user-messaging-platform:3.1.0")' "$GRADLE"
 
+          # R8 নিয়ম: বিজ্ঞাপন SDK WorkManager/Room টেনে আনে। R8 Room-এর খালি constructor
+          # মুছে ফেললে অ্যাপ চালুতেই "Failed to create an instance of WorkDatabase" ক্র্যাশ হয়
+          cat >> "$APP/proguard-rules.pro" << 'EOF'
+
+          # ---- AdMob / WorkManager / Room ----
+          -keep class * extends androidx.room.RoomDatabase { <init>(); }
+          -keep class androidx.work.impl.WorkDatabase_Impl { <init>(); }
+          -keep class * extends androidx.work.ListenableWorker {
+              public <init>(android.content.Context, androidx.work.WorkerParameters);
+          }
+          -keep class androidx.startup.** { *; }
+          -keep class com.google.android.gms.ads.** { *; }
+          -dontwarn androidx.room.paging.**
+          EOF
+
           # Manifest: AdMob App ID + AD_ID permission
           python3 - << 'PY'
           import os
