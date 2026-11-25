@@ -218,6 +218,8 @@ btnPdf.addEventListener("click", async () => {
     }
     finishProgress("পেজ", pageCount);
     log("🎉 সম্পন্ন!");
+    showInterstitialIfDue();
+    await maybeShowInterstitial();
   } catch (err) {
     log(`❌ ${err}`);
     console.error(err);
@@ -269,6 +271,8 @@ btnImg.addEventListener("click", async () => {
     }
     finishProgress("ছবি", total);
     log("🎉 সম্পন্ন!");
+    showInterstitialIfDue();
+    await maybeShowInterstitial();
   } catch (err) {
     log(`❌ ${err}`);
     console.error(err);
@@ -277,6 +281,59 @@ btnImg.addEventListener("click", async () => {
     setBusy(false);
   }
 });
+
+// ================= বিজ্ঞাপন (AdMob) =================
+// ⚠️ নিচের আইডিগুলো Google-এর টেস্ট আইডি। প্রকাশের আগে নিজের AdMob আইডি বসান।
+// টেস্ট আইডি ছাড়া নিজের বিজ্ঞাপনে নিজে ক্লিক করবেন না — অ্যাকাউন্ট বন্ধ হতে পারে।
+const ADS = {
+  enabled: true,
+  bannerId: "ca-app-pub-3940256099942544/9214589741", // টেস্ট: অ্যাডাপ্টিভ ব্যানার
+  interstitialId: "ca-app-pub-3940256099942544/1033173712", // টেস্ট: ইন্টারস্টিশিয়াল
+  interstitialMinGapMs: 3 * 60 * 1000, // দুই ফুলস্ক্রিন বিজ্ঞাপনের মাঝে ন্যূনতম ৩ মিনিট
+};
+let lastInterstitialAt = 0;
+
+const adsCall = (cmd, payload = {}) => invoke("ads_call", { cmd, payload });
+
+function addPrivacyLink() {
+  if (document.querySelector("#ads-privacy")) return;
+  const b = document.createElement("button");
+  b.id = "ads-privacy";
+  b.textContent = "বিজ্ঞাপন গোপনীয়তা সেটিংস";
+  b.style.cssText =
+    "display:block; margin:12px auto 0; background:none; border:none; color:#64748b; font-size:.8rem; text-decoration:underline;";
+  b.addEventListener("click", () => adsCall("privacyOptions").catch(() => {}));
+  document.querySelector("#app > div").appendChild(b);
+}
+
+async function initAds() {
+  if (!ADS.enabled) return;
+  try {
+    const r = await adsCall("init");
+    if (!r || r.canRequestAds === false) return;
+
+    const b = await adsCall("showBanner", { unitId: ADS.bannerId });
+    // ব্যানার যাতে কনটেন্ট ঢেকে না দেয়
+    if (b && b.height) document.body.style.paddingBottom = `${Math.ceil(b.height) + 8}px`;
+
+    await adsCall("loadInterstitial", { unitId: ADS.interstitialId });
+    if (r.privacyOptionsRequired) addPrivacyLink();
+  } catch (err) {
+    console.warn("Ads init failed:", err);
+  }
+}
+
+// কাজ সম্পন্ন হলে (স্বাভাবিক বিরতিতে) ফুলস্ক্রিন বিজ্ঞাপন, ফ্রিকোয়েন্সি সীমা মেনে
+async function showInterstitialIfDue() {
+  if (!ADS.enabled) return;
+  if (Date.now() - lastInterstitialAt < ADS.interstitialMinGapMs) return;
+  try {
+    const r = await adsCall("showInterstitial");
+    if (r && r.shown) lastInterstitialAt = Date.now();
+  } catch (err) {
+    console.warn("Interstitial failed:", err);
+  }
+}
 
 // ================= আপডেট চেক =================
 // Hugging Face-এর JSON ফাইল: { "app_version": "v1.0.1", "update_notes": "...", "apk_url": "https://..." }
@@ -467,3 +524,4 @@ async function checkForUpdate() {
 
 log("✅ App ready");
 checkForUpdate();
+initAds();
