@@ -11,6 +11,76 @@ const DPI: f32 = 300.0;
 // অস্বাভাবিক বড় পেজে মেমরি বাঁচাতে সর্বোচ্চ দৈর্ঘ্য (পিক্সেল)
 const MAX_SIDE_PX: f32 = 12000.0;
 
+// ================= আপডেটার (Android Kotlin প্লাগইনের সেতু) =================
+#[cfg(target_os = "android")]
+mod updater {
+    use serde_json::{json, Value};
+    use tauri::plugin::{Builder, PluginHandle, TauriPlugin};
+    use tauri::{AppHandle, Manager, Wry};
+
+    pub struct UpdaterHandle(pub PluginHandle<Wry>);
+
+    pub fn plugin() -> TauriPlugin<Wry> {
+        Builder::<Wry>::new("apkupdater")
+            .setup(|app, api| {
+                let handle = api.register_android_plugin("com.aqis.ocr", "UpdaterPlugin")?;
+                app.manage(UpdaterHandle(handle));
+                Ok(())
+            })
+            .build()
+    }
+
+    fn call(app: &AppHandle, cmd: &str, payload: Value) -> Result<Value, String> {
+        let h = app.state::<UpdaterHandle>();
+        h.0.run_mobile_plugin::<Value>(cmd, payload)
+            .map_err(|e| e.to_string())
+    }
+
+    #[tauri::command]
+    pub async fn update_download(app: AppHandle, url: String) -> Result<Value, String> {
+        call(&app, "download", json!({ "url": url }))
+    }
+
+    #[tauri::command]
+    pub async fn update_progress(app: AppHandle) -> Result<Value, String> {
+        call(&app, "progress", json!({}))
+    }
+
+    #[tauri::command]
+    pub async fn update_install(app: AppHandle) -> Result<Value, String> {
+        call(&app, "install", json!({}))
+    }
+}
+
+// ডেস্কটপ বিল্ডে কম্পাইল ঠিক রাখতে খালি সংস্করণ
+#[cfg(not(target_os = "android"))]
+mod updater {
+    use serde_json::Value;
+    use tauri::plugin::{Builder, TauriPlugin};
+    use tauri::Wry;
+
+    pub fn plugin() -> TauriPlugin<Wry> {
+        Builder::<Wry>::new("apkupdater").build()
+    }
+
+    #[tauri::command]
+    pub async fn update_download(_url: String) -> Result<Value, String> {
+        Err("শুধু Android-এ সমর্থিত".into())
+    }
+
+    #[tauri::command]
+    pub async fn update_progress() -> Result<Value, String> {
+        Err("শুধু Android-এ সমর্থিত".into())
+    }
+
+    #[tauri::command]
+    pub async fn update_install() -> Result<Value, String> {
+        Err("শুধু Android-এ সমর্থিত".into())
+    }
+}
+
+// ================= PDF =================
+
 // ১. পেজ সংখ্যা জানার জন্য
 #[tauri::command]
 async fn get_pdf_page_count(pdf_path: String) -> Result<usize, String> {
@@ -93,9 +163,14 @@ pub fn run() {
         .plugin(tauri_plugin_scoped_storage::init())
         .plugin(tauri_plugin_dialog::init())
         .plugin(tauri_plugin_fs::init())
+        .plugin(tauri_plugin_opener::init())
+        .plugin(updater::plugin())
         .invoke_handler(tauri::generate_handler![
             get_pdf_page_count,
-            render_pdf_page
+            render_pdf_page,
+            updater::update_download,
+            updater::update_progress,
+            updater::update_install
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");
