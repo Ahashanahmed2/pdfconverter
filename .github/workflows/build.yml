@@ -265,6 +265,7 @@ jobs:
         env:
           # & XML-এ লিখতে হয় &amp; হিসেবে
           APP_LABEL: "PDF&amp;Image Converter"
+          ICON_FIT: contain   # বা cover
         run: |
           set -e
           # আইকন: রুটে app-icon.png থাকলে সেটা, নাহলে src-tauri/icons/icon.png
@@ -273,8 +274,10 @@ jobs:
           echo "Icon source: $SRC"
           file "$SRC"
           cp "$SRC" "$RUNNER_TEMP/app-icon.png"
-          # init-এর পরে চালালে Android-এর mipmap আইকনও নতুন করে লেখে
-          npx tauri icon "$RUNNER_TEMP/app-icon.png"
+          # init-এর পরে চালালে Android-এর mipmap আইকনও নতুন করে লেখে।
+          # ছবি বর্গাকার না হলে ICON_FIT লাগে: contain = পুরো ছবি রেখে ফাঁকা অংশ স্বচ্ছ,
+          # cover = বর্গাকার করে কেটে নেয়
+          npx tauri icon "$RUNNER_TEMP/app-icon.png" --fit "$ICON_FIT"
           ls -la src-tauri/gen/android/app/src/main/res/mipmap-xxxhdpi/
 
           # অ্যাপের নাম (লঞ্চারে যা দেখায়)
