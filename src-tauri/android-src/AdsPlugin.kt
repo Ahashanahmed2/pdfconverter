@@ -36,6 +36,7 @@ class AdsPlugin(private val activity: Activity) : Plugin(activity) {
 
     private var sdkStarted = false
     private var banner: AdView? = null
+    private var mrec: AdView? = null
     private var interstitial: InterstitialAd? = null
     private var interstitialLoading = false
     private var interstitialUnitId: String? = null
@@ -155,6 +156,66 @@ class AdsPlugin(private val activity: Activity) : Plugin(activity) {
                 it.destroy()
             }
             banner = null
+            invoke.resolve()
+        }
+    }
+
+    // ---------- ২.৫ মিডিয়াম রেক্টাঙ্গেল (৩০০×২৫০) — কাজ চলার সময় পর্দার উপরে ----------
+    private fun removeMrec() {
+        mrec?.let {
+            (it.parent as? ViewGroup)?.removeView(it)
+            it.destroy()
+        }
+        mrec = null
+    }
+
+    @Command
+    fun showMrec(invoke: Invoke) {
+        val args = invoke.parseArgs(UnitArgs::class.java)
+        activity.runOnUiThread {
+            try {
+                if (!canRequestAds()) {
+                    invoke.reject("সম্মতি ছাড়া বিজ্ঞাপন দেখানো যাবে না")
+                    return@runOnUiThread
+                }
+                startSdk()
+                removeMrec()
+
+                val root = activity.findViewById<ViewGroup>(android.R.id.content)
+                val density = activity.resources.displayMetrics.density
+                // স্ট্যাটাস বারের নিচে বসানোর জন্য
+                val topPx = ViewCompat.getRootWindowInsets(root)
+                    ?.getInsets(WindowInsetsCompat.Type.systemBars())?.top ?: 0
+
+                val adView = AdView(activity)
+                adView.adUnitId = args.unitId
+                adView.setAdSize(AdSize.MEDIUM_RECTANGLE)
+
+                val lp = FrameLayout.LayoutParams(
+                    ViewGroup.LayoutParams.WRAP_CONTENT,
+                    ViewGroup.LayoutParams.WRAP_CONTENT,
+                    Gravity.TOP or Gravity.CENTER_HORIZONTAL
+                )
+                lp.topMargin = topPx
+                root.addView(adView, lp)
+
+                adView.loadAd(AdRequest.Builder().build())
+                mrec = adView
+
+                val o = JSObject()
+                o.put("height", AdSize.MEDIUM_RECTANGLE.height) // dp
+                o.put("topInset", (topPx / density).toInt())    // dp
+                invoke.resolve(o)
+            } catch (e: Exception) {
+                invoke.reject(e.message ?: e.toString())
+            }
+        }
+    }
+
+    @Command
+    fun hideMrec(invoke: Invoke) {
+        activity.runOnUiThread {
+            removeMrec()
             invoke.resolve()
         }
     }
