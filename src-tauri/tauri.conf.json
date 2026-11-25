@@ -1,6 +1,6 @@
 {
-  "productName": "AQIS OCR",
-  "version": "1.0.0",
+  "productName": "PDF Image Converter",
+  "version": "1.0.1",
   "identifier": "com.aqis.ocr",
   "build": {
     "beforeBuildCommand": "npm run build",
@@ -12,7 +12,7 @@
     },
     "windows": [
       {
-        "title": "AQIS OCR",
+        "title": "PDF&Image Converter",
         "width": 800,
         "height": 600
       }
