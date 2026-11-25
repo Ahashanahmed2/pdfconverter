@@ -20,6 +20,7 @@ import { open } from "@tauri-apps/plugin-dialog";
 import { readFile, writeFile as fsWriteFile, remove } from "@tauri-apps/plugin-fs";
 import { appCacheDir, join } from "@tauri-apps/api/path";
 import { pickFolder, writeTextFile, writeFile } from "tauri-plugin-scoped-storage-api";
+import { zipSync, strToU8 } from "fflate";
 
 const app = document.querySelector("#app");
 
@@ -29,22 +30,16 @@ app.innerHTML = `
     <p style="color: #64748b; font-size: 0.9rem; margin: 0 0 16px;">PDF ও ছবি থেকে টেক্সট</p>
 
     <div style="background:#fff; padding:16px; border-radius:12px; margin-bottom:16px;">
-      <div style="display:flex; gap:12px; margin-bottom:14px;">
-        <div style="flex:1;">
+      <div style="display:flex; flex-wrap:wrap; gap:12px; margin-bottom:14px;">
+        <div style="flex:1 1 100%;">
           <label style="font-size:.85rem;font-weight:600;">ফরম্যাট</label>
           <select id="format" style="width:100%; padding:8px; margin-top:4px;">
-            <option value="txt">TXT</option>
-            <option value="md">Markdown</option>
-            <option value="json">JSON</option>
           </select>
         </div>
-        <div style="flex:1;">
-          <label style="font-size:.85rem;font-weight:600;">ভাষা</label>
-          <select id="langs" style="width:100%; padding:8px; margin-top:4px;">
-            <option value="eng+ben">English + বাংলা</option>
-            <option value="ben">বাংলা</option>
-            <option value="eng">English</option>
-          </select>
+        <div style="flex:1 1 100%;">
+          <label style="font-size:.85rem;font-weight:600;">ভাষা <span style="font-weight:400;color:#64748b;">(সর্বোচ্চ ৩টি)</span></label>
+          <button id="lang-btn" type="button" style="display:block; width:100%; padding:10px; margin-top:4px; text-align:left; border:1px solid #767676; border-radius:4px; background:#fff; color:#0f172a; font-size:1rem; white-space:nowrap; overflow:hidden; text-overflow:ellipsis;">—</button>
+          <input type="hidden" id="langs" value="eng+ben">
         </div>
       </div>
       <div style="display:flex; gap:10px;">
@@ -87,9 +82,183 @@ function log(msg) {
 function setBusy(busy) {
   btnPdf.disabled = busy;
   btnImg.disabled = busy;
+  document.querySelector("#format").disabled = busy;
+  document.querySelector("#lang-btn").disabled = busy;
   // কাজ চলার সময় উপরে বড় বিজ্ঞাপন, শেষে নিচে ব্যানার
   if (busy) enterWorkAds(); else leaveWorkAds();
 }
+
+// ================= ভাষা নির্বাচন (Tesseract-এর সব ভাষা, সর্বোচ্চ ৩টি একসাথে) =================
+const MAX_LANGS = 3;
+// [কোড, ইংরেজি নাম, নিজস্ব নাম]
+const LANGUAGES = [
+  ["afr", "Afrikaans", "Afrikaans"], ["amh", "Amharic", "አማርኛ"], ["ara", "Arabic", "العربية"],
+  ["asm", "Assamese", "অসমীয়া"], ["aze", "Azerbaijani", "Azərbaycan"], ["aze_cyrl", "Azerbaijani (Cyrillic)", ""],
+  ["bel", "Belarusian", "Беларуская"], ["ben", "Bengali", "বাংলা"], ["bod", "Tibetan", "བོད་ཡིག"],
+  ["bos", "Bosnian", "Bosanski"], ["bul", "Bulgarian", "Български"], ["cat", "Catalan", "Català"],
+  ["ceb", "Cebuano", ""], ["ces", "Czech", "Čeština"], ["chi_sim", "Chinese (Simplified)", "简体中文"],
+  ["chi_tra", "Chinese (Traditional)", "繁體中文"], ["chr", "Cherokee", "ᏣᎳᎩ"], ["cym", "Welsh", "Cymraeg"],
+  ["dan", "Danish", "Dansk"], ["deu", "German", "Deutsch"], ["dzo", "Dzongkha", "རྫོང་ཁ"],
+  ["ell", "Greek", "Ελληνικά"], ["eng", "English", "English"], ["enm", "Middle English", ""],
+  ["epo", "Esperanto", ""], ["est", "Estonian", "Eesti"], ["eus", "Basque", "Euskara"],
+  ["fas", "Persian", "فارسی"], ["fin", "Finnish", "Suomi"], ["fra", "French", "Français"],
+  ["frk", "German (Fraktur)", ""], ["frm", "Middle French", ""], ["gle", "Irish", "Gaeilge"],
+  ["glg", "Galician", "Galego"], ["grc", "Ancient Greek", ""], ["guj", "Gujarati", "ગુજરાતી"],
+  ["hat", "Haitian Creole", ""], ["heb", "Hebrew", "עברית"], ["hin", "Hindi", "हिन्दी"],
+  ["hrv", "Croatian", "Hrvatski"], ["hun", "Hungarian", "Magyar"], ["iku", "Inuktitut", ""],
+  ["ind", "Indonesian", "Bahasa Indonesia"], ["isl", "Icelandic", "Íslenska"], ["ita", "Italian", "Italiano"],
+  ["ita_old", "Italian (Old)", ""], ["jav", "Javanese", ""], ["jpn", "Japanese", "日本語"],
+  ["kan", "Kannada", "ಕನ್ನಡ"], ["kat", "Georgian", "ქართული"], ["kat_old", "Georgian (Old)", ""],
+  ["kaz", "Kazakh", "Қазақ"], ["khm", "Khmer", "ខ្មែរ"], ["kir", "Kyrgyz", "Кыргызча"],
+  ["kor", "Korean", "한국어"], ["kur", "Kurdish", ""], ["lao", "Lao", "ລາວ"],
+  ["lat", "Latin", ""], ["lav", "Latvian", "Latviešu"], ["lit", "Lithuanian", "Lietuvių"],
+  ["mal", "Malayalam", "മലയാളം"], ["mar", "Marathi", "मराठी"], ["mkd", "Macedonian", "Македонски"],
+  ["mlt", "Maltese", "Malti"], ["msa", "Malay", "Bahasa Melayu"], ["mya", "Burmese", "မြန်မာ"],
+  ["nep", "Nepali", "नेपाली"], ["nld", "Dutch", "Nederlands"], ["nor", "Norwegian", "Norsk"],
+  ["ori", "Odia", "ଓଡ଼ିଆ"], ["pan", "Punjabi", "ਪੰਜਾਬੀ"], ["pol", "Polish", "Polski"],
+  ["por", "Portuguese", "Português"], ["pus", "Pashto", "پښتو"], ["ron", "Romanian", "Română"],
+  ["rus", "Russian", "Русский"], ["san", "Sanskrit", "संस्कृतम्"], ["sin", "Sinhala", "සිංහල"],
+  ["slk", "Slovak", "Slovenčina"], ["slv", "Slovenian", "Slovenščina"], ["spa", "Spanish", "Español"],
+  ["spa_old", "Spanish (Old)", ""], ["sqi", "Albanian", "Shqip"], ["srp", "Serbian", "Српски"],
+  ["srp_latn", "Serbian (Latin)", ""], ["swa", "Swahili", "Kiswahili"], ["swe", "Swedish", "Svenska"],
+  ["syr", "Syriac", "ܣܘܪܝܝܐ"], ["tam", "Tamil", "தமிழ்"], ["tel", "Telugu", "తెలుగు"],
+  ["tgk", "Tajik", "Тоҷикӣ"], ["tgl", "Tagalog", ""], ["tha", "Thai", "ไทย"],
+  ["tir", "Tigrinya", "ትግርኛ"], ["tur", "Turkish", "Türkçe"], ["uig", "Uyghur", "ئۇيغۇرچە"],
+  ["ukr", "Ukrainian", "Українська"], ["urd", "Urdu", "اردو"], ["uzb", "Uzbek", "Oʻzbek"],
+  ["uzb_cyrl", "Uzbek (Cyrillic)", ""], ["vie", "Vietnamese", "Tiếng Việt"], ["yid", "Yiddish", "ייִדיש"],
+].map(([code, en, native]) => ({ code, en, native }));
+
+const LANG_MAP = Object.fromEntries(LANGUAGES.map((l) => [l.code, l]));
+const POPULAR_LANGS = ["ben", "eng", "ara", "hin", "urd"];
+const LANG_STORE_KEY = "aqis_langs";
+
+function loadLangs() {
+  try {
+    const s = JSON.parse(localStorage.getItem(LANG_STORE_KEY) || "null");
+    if (Array.isArray(s) && s.length >= 1 && s.length <= MAX_LANGS && s.every((c) => LANG_MAP[c])) return s;
+  } catch (_) {}
+  return ["eng", "ben"];
+}
+
+let selectedLangs = loadLangs();
+
+function langLabel(code) {
+  const l = LANG_MAP[code];
+  return l.native && l.native !== l.en ? l.native : l.en;
+}
+
+function applyLangs() {
+  document.querySelector("#langs").value = selectedLangs.join("+");
+  document.querySelector("#lang-btn").textContent = selectedLangs.map(langLabel).join(" + ");
+  try { localStorage.setItem(LANG_STORE_KEY, JSON.stringify(selectedLangs)); } catch (_) {}
+}
+
+function openLangModal() {
+  if (document.querySelector("#lang-modal")) return;
+  let pick = [...selectedLangs];
+  let query = "";
+
+  const overlay = document.createElement("div");
+  overlay.id = "lang-modal";
+  overlay.style.cssText =
+    "position:fixed; inset:0; background:rgba(15,23,42,.6); z-index:9000; display:flex; align-items:center; justify-content:center; padding:16px;";
+
+  const card = document.createElement("div");
+  card.style.cssText =
+    "background:#fff; border-radius:16px; width:100%; max-width:420px; max-height:85vh; display:flex; flex-direction:column; box-shadow:0 10px 40px rgba(0,0,0,.3);";
+
+  const head = document.createElement("div");
+  head.style.cssText = "padding:16px 16px 8px;";
+  const title = document.createElement("div");
+  title.textContent = `ভাষা বাছুন (সর্বোচ্চ ${MAX_LANGS}টি)`;
+  title.style.cssText = "font-size:1.1rem; font-weight:700; margin-bottom:4px;";
+  const hint = document.createElement("div");
+  hint.textContent = "একই PDF/ছবিতে একাধিক ভাষা থাকলে সবগুলো বাছুন। যত বেশি ভাষা, তত ধীর ও বেশি মেমরি লাগে।";
+  hint.style.cssText = "font-size:.78rem; color:#64748b; margin-bottom:10px;";
+  const search = document.createElement("input");
+  search.type = "search";
+  search.placeholder = "খুঁজুন (নাম বা কোড)";
+  search.style.cssText =
+    "width:100%; box-sizing:border-box; padding:10px; border:1px solid #cbd5e1; border-radius:8px; font-size:1rem;";
+  head.append(title, hint, search);
+
+  const list = document.createElement("div");
+  list.style.cssText = "flex:1; overflow-y:auto; padding:0 8px;";
+
+  const foot = document.createElement("div");
+  foot.style.cssText = "padding:12px 16px 16px; border-top:1px solid #e2e8f0;";
+  const count = document.createElement("div");
+  count.style.cssText = "font-size:.85rem; font-weight:600; margin-bottom:10px;";
+  const btns = document.createElement("div");
+  btns.style.cssText = "display:flex; gap:10px;";
+  const btnOk = document.createElement("button");
+  btnOk.textContent = "ঠিক আছে";
+  btnOk.style.cssText =
+    "flex:1; padding:12px; background:#2563eb; color:#fff; border:none; border-radius:8px; font-weight:600;";
+  const btnCancel = document.createElement("button");
+  btnCancel.textContent = "বাতিল";
+  btnCancel.style.cssText =
+    "padding:12px 18px; background:#e2e8f0; color:#0f172a; border:none; border-radius:8px; font-weight:600;";
+  btns.append(btnOk, btnCancel);
+  foot.append(count, btns);
+
+  const ordered = [
+    ...POPULAR_LANGS.map((c) => LANG_MAP[c]),
+    ...LANGUAGES.filter((l) => !POPULAR_LANGS.includes(l.code)).sort((a, b) => a.en.localeCompare(b.en)),
+  ];
+
+  function render() {
+    list.textContent = "";
+    const q = query.trim().toLowerCase();
+    const full = pick.length >= MAX_LANGS;
+    for (const l of ordered) {
+      if (q && !(l.en.toLowerCase().includes(q) || l.native.toLowerCase().includes(q) || l.code.includes(q))) continue;
+      const checked = pick.includes(l.code);
+      const row = document.createElement("label");
+      const disabled = full && !checked;
+      row.style.cssText =
+        `display:flex; align-items:center; gap:12px; padding:11px 8px; border-bottom:1px solid #f1f5f9; ${disabled ? "opacity:.4;" : ""}`;
+      const cb = document.createElement("input");
+      cb.type = "checkbox";
+      cb.checked = checked;
+      cb.disabled = disabled;
+      cb.style.cssText = "width:20px; height:20px; flex:none;";
+      cb.addEventListener("change", () => {
+        if (cb.checked) { if (pick.length < MAX_LANGS) pick.push(l.code); }
+        else pick = pick.filter((c) => c !== l.code);
+        render();
+      });
+      const name = document.createElement("div");
+      name.style.cssText = "flex:1; min-width:0;";
+      const main = document.createElement("div");
+      main.textContent = l.native && l.native !== l.en ? `${l.native}  ·  ${l.en}` : l.en;
+      main.style.cssText = "font-size:.98rem;";
+      name.appendChild(main);
+      row.append(cb, name);
+      list.appendChild(row);
+    }
+    count.textContent = `নির্বাচিত: ${pick.length}/${MAX_LANGS}  ${pick.map(langLabel).join(" + ")}`;
+    btnOk.disabled = pick.length === 0;
+    btnOk.style.opacity = pick.length === 0 ? ".5" : "1";
+  }
+
+  search.addEventListener("input", () => { query = search.value; render(); });
+  btnCancel.addEventListener("click", () => overlay.remove());
+  btnOk.addEventListener("click", () => {
+    if (pick.length === 0) return;
+    selectedLangs = pick;
+    applyLangs();
+    overlay.remove();
+  });
+
+  card.append(head, list, foot);
+  overlay.appendChild(card);
+  document.body.appendChild(overlay);
+  render();
+}
+
+document.querySelector("#lang-btn").addEventListener("click", openLangModal);
+applyLangs();
 
 // ---- Progress ----
 // done = সম্পন্ন আইটেম সংখ্যা, frac = বর্তমান আইটেমের অগ্রগতি (0..1)
@@ -120,10 +289,202 @@ function baseNameOf(p, fallback) {
   return s;
 }
 
-function formatOutput(text, format, sourcePath) {
-  if (format === "json") return JSON.stringify({ source: sourcePath, text: text.trim() }, null, 2);
-  if (format === "md") return `# OCR\n\n**Source:** \`${sourcePath}\`\n\n${text.trim()}`;
-  return text;
+// ================= আউটপুট ফরম্যাট (Word থেকে Linux-এর সব টেক্সট ফরম্যাট) =================
+const xmlEsc = (s) =>
+  String(s)
+    .replace(/[\x00-\x08\x0B\x0C\x0E-\x1F]/g, "")
+    .replace(/&/g, "&amp;")
+    .replace(/</g, "&lt;")
+    .replace(/>/g, "&gt;")
+    .replace(/"/g, "&quot;");
+
+const RTL_RE = /[\u0590-\u08FF\uFB1D-\uFDFF\uFE70-\uFEFF]/;
+
+// টেক্সটকে অনুচ্ছেদে ভাগ: ফাঁকা লাইনে অনুচ্ছেদ, এক লাইনের বিরতি লাইন-ব্রেক
+const toParagraphs = (text) =>
+  String(text).replace(/\r\n?/g, "\n").trim().split(/\n\s*\n/).map((p) => p.split("\n").map((l) => l.trimEnd()));
+
+// CSV/TSV ঘর
+const csvCell = (s) => `"${String(s).replace(/"/g, '""')}"`;
+
+// RTF: ASCII-র বাইরের অক্ষর \uN? আকারে
+function rtfEsc(s) {
+  let out = "";
+  for (let i = 0; i < s.length; i++) {
+    const c = s.charCodeAt(i);
+    const ch = s[i];
+    if (ch === "\\" || ch === "{" || ch === "}") out += "\\" + ch;
+    else if (ch === "\n") out += "\\line ";
+    else if (c < 32 && ch !== "\t") continue;
+    else if (c > 126) out += `\\u${c > 32767 ? c - 65536 : c}?`;
+    else out += ch;
+  }
+  return out;
+}
+
+// LaTeX বিশেষ অক্ষর
+const texEsc = (s) =>
+  String(s)
+    .replace(/\\/g, "\\textbackslash{}")
+    .replace(/([&%$#_{}])/g, "\\$1")
+    .replace(/~/g, "\\textasciitilde{}")
+    .replace(/\^/g, "\\textasciicircum{}");
+
+const bodyText = (text) => String(text).replace(/\r\n?/g, "\n").trim();
+
+// id, লেবেল, এক্সটেনশন, mime, binary?, build(text, source)
+const FORMATS = [
+  { id: "txt", label: "TXT — সাধারণ টেক্সট", ext: "txt", mime: "text/plain",
+    build: (t) => bodyText(t) + "\n" },
+  { id: "md", label: "Markdown (.md)", ext: "md", mime: "text/markdown",
+    build: (t, src) => `# OCR\n\n**Source:** \`${src}\`\n\n${bodyText(t)}\n` },
+  { id: "rst", label: "reStructuredText (.rst)", ext: "rst", mime: "text/x-rst",
+    build: (t, src) => `OCR\n===\n\n:Source: ${src}\n\n${bodyText(t)}\n` },
+  { id: "adoc", label: "AsciiDoc (.adoc)", ext: "adoc", mime: "text/plain",
+    build: (t, src) => `= OCR\n:source: ${src}\n\n${bodyText(t)}\n` },
+  { id: "org", label: "Org-mode (.org)", ext: "org", mime: "text/plain",
+    build: (t, src) => `#+TITLE: OCR\n#+SOURCE: ${src}\n\n${bodyText(t)}\n` },
+  { id: "html", label: "HTML (.html)", ext: "html", mime: "text/html",
+    build: (t, src) =>
+      `<!DOCTYPE html>\n<html>\n<head>\n<meta charset="utf-8">\n<title>${xmlEsc(src)}</title>\n</head>\n<body>\n` +
+      toParagraphs(t).map((p) => `<p dir="auto">${p.map(xmlEsc).join("<br>\n")}</p>`).join("\n") +
+      `\n</body>\n</html>\n` },
+  { id: "xml", label: "XML (.xml)", ext: "xml", mime: "application/xml",
+    build: (t, src) =>
+      `<?xml version="1.0" encoding="UTF-8"?>\n<ocr>\n  <source>${xmlEsc(src)}</source>\n  <text>${xmlEsc(bodyText(t))}</text>\n</ocr>\n` },
+  { id: "json", label: "JSON (.json)", ext: "json", mime: "application/json",
+    build: (t, src) => JSON.stringify({ source: src, text: bodyText(t) }, null, 2) + "\n" },
+  { id: "yaml", label: "YAML (.yaml)", ext: "yaml", mime: "text/yaml",
+    build: (t, src) =>
+      `source: ${JSON.stringify(src)}\ntext: |\n` +
+      bodyText(t).split("\n").map((l) => "  " + l).join("\n") + "\n" },
+  { id: "csv", label: "CSV (.csv)", ext: "csv", mime: "text/csv",
+    build: (t, src) =>
+      "\uFEFFsource,line,text\n" +
+      bodyText(t).split("\n").map((l, i) => `${csvCell(src)},${i + 1},${csvCell(l)}`).join("\n") + "\n" },
+  { id: "tsv", label: "TSV (.tsv)", ext: "tsv", mime: "text/tab-separated-values",
+    build: (t, src) =>
+      "source\tline\ttext\n" +
+      bodyText(t).split("\n").map((l, i) => `${src}\t${i + 1}\t${l.replace(/\t/g, " ")}`).join("\n") + "\n" },
+  { id: "tex", label: "LaTeX (.tex, XeLaTeX)", ext: "tex", mime: "application/x-tex",
+    build: (t, src) =>
+      `% XeLaTeX বা LuaLaTeX দিয়ে কম্পাইল করুন (ইউনিকোড/বাংলা সমর্থনের জন্য)\n` +
+      `\\documentclass{article}\n\\usepackage{fontspec}\n\\begin{document}\n` +
+      `% Source: ${texEsc(src)}\n` +
+      toParagraphs(t).map((p) => p.map(texEsc).join(" \\\\\n")).join("\n\n") +
+      `\n\\end{document}\n` },
+  { id: "rtf", label: "RTF (.rtf)", ext: "rtf", mime: "application/rtf",
+    build: (t) =>
+      `{\\rtf1\\ansi\\deff0{\\fonttbl{\\f0 Arial;}}\\uc1\\f0\\fs24\n` +
+      toParagraphs(t).map((p) => rtfEsc(p.join("\n"))).join("\\par\n\\par\n") + `\n}\n` },
+  { id: "docx", label: "MS Word (.docx)", ext: "docx", binary: true,
+    mime: "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+    build: (t) => {
+      const paras = toParagraphs(t)
+        .map((p) => {
+          const rtl = RTL_RE.test(p.join(""));
+          const runs = p
+            .map((l) => `<w:t xml:space="preserve">${xmlEsc(l)}</w:t>`)
+            .join("<w:br/>");
+          return `<w:p>${rtl ? "<w:pPr><w:bidi/></w:pPr>" : ""}<w:r>${rtl ? "<w:rPr><w:rtl/></w:rPr>" : ""}${runs}</w:r></w:p>`;
+        })
+        .join("");
+      const doc =
+        `<?xml version="1.0" encoding="UTF-8" standalone="yes"?>` +
+        `<w:document xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main"><w:body>${paras}` +
+        `<w:sectPr><w:pgSz w:w="11906" w:h="16838"/><w:pgMar w:top="1440" w:right="1440" w:bottom="1440" w:left="1440" w:header="708" w:footer="708" w:gutter="0"/></w:sectPr>` +
+        `</w:body></w:document>`;
+      return zipSync({
+        "[Content_Types].xml": strToU8(
+          `<?xml version="1.0" encoding="UTF-8" standalone="yes"?>` +
+          `<Types xmlns="http://schemas.openxmlformats.org/package/2006/content-types">` +
+          `<Default Extension="rels" ContentType="application/vnd.openxmlformats-package.relationships+xml"/>` +
+          `<Default Extension="xml" ContentType="application/xml"/>` +
+          `<Override PartName="/word/document.xml" ContentType="application/vnd.openxmlformats-officedocument.wordprocessingml.document.main+xml"/>` +
+          `</Types>`),
+        "_rels/.rels": strToU8(
+          `<?xml version="1.0" encoding="UTF-8" standalone="yes"?>` +
+          `<Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships">` +
+          `<Relationship Id="rId1" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/officeDocument" Target="word/document.xml"/>` +
+          `</Relationships>`),
+        "word/document.xml": strToU8(doc),
+      });
+    } },
+  { id: "odt", label: "LibreOffice (.odt)", ext: "odt", binary: true,
+    mime: "application/vnd.oasis.opendocument.text",
+    build: (t) => {
+      const paras = toParagraphs(t)
+        .map((p) => `<text:p>${p.map(xmlEsc).join("<text:line-break/>")}</text:p>`)
+        .join("");
+      const content =
+        `<?xml version="1.0" encoding="UTF-8"?>` +
+        `<office:document-content xmlns:office="urn:oasis:names:tc:opendocument:xmlns:office:1.0" ` +
+        `xmlns:text="urn:oasis:names:tc:opendocument:xmlns:text:1.0" office:version="1.2">` +
+        `<office:body><office:text>${paras}</office:text></office:body></office:document-content>`;
+      const mt = "application/vnd.oasis.opendocument.text";
+      return zipSync({
+        // mimetype সবার আগে ও সংকোচন ছাড়া থাকতে হয়
+        "mimetype": [strToU8(mt), { level: 0 }],
+        "META-INF/manifest.xml": strToU8(
+          `<?xml version="1.0" encoding="UTF-8"?>` +
+          `<manifest:manifest xmlns:manifest="urn:oasis:names:tc:opendocument:xmlns:manifest:1.0" manifest:version="1.2">` +
+          `<manifest:file-entry manifest:full-path="/" manifest:version="1.2" manifest:media-type="${mt}"/>` +
+          `<manifest:file-entry manifest:full-path="content.xml" manifest:media-type="text/xml"/>` +
+          `</manifest:manifest>`),
+        "content.xml": strToU8(content),
+      });
+    } },
+  // Word-এর পুরনো .doc ফরম্যাট: আসলে RTF, Word সরাসরি খুলতে পারে
+  { id: "doc", label: "MS Word 97-2003 (.doc, RTF-ভিত্তিক)", ext: "doc", mime: "application/msword",
+    build: (t, s) => FORMAT_MAP.rtf.build(t, s) },
+  { id: "log", label: "LOG (.log)", ext: "log", mime: "text/plain",
+    build: (t, s) => `# ${s}\n${bodyText(t)}\n` },
+  { id: "man", label: "Linux man page (.man)", ext: "man", mime: "text/troff",
+    build: (t, s) =>
+      `.TH OCR 1 "" "" "${String(s).replace(/["\\]/g, "")}"\n.SH TEXT\n.nf\n` +
+      bodyText(t).split("\n").map((l) => l.replace(/\\/g, "\\e").replace(/^([.'])/, "\\&$1")).join("\n") +
+      "\n.fi\n" },
+];
+const FORMAT_MAP = Object.fromEntries(FORMATS.map((f) => [f.id, f]));
+
+// ফরম্যাট তালিকা পূরণ
+(function fillFormats() {
+  const sel = document.querySelector("#format");
+  for (const f of FORMATS) {
+    const o = document.createElement("option");
+    o.value = f.id;
+    o.textContent = f.label;
+    sel.appendChild(o);
+  }
+  try {
+    const saved = localStorage.getItem("aqis_format");
+    if (saved && FORMAT_MAP[saved]) sel.value = saved;
+  } catch (_) {}
+  sel.addEventListener("change", () => {
+    try { localStorage.setItem("aqis_format", sel.value); } catch (_) {}
+  });
+})();
+
+// ফাইলের দেখানোর নাম (এক্সটেনশনসহ), content:// URI থেকে
+function displayName(p) {
+  let s = String(p);
+  try { s = decodeURIComponent(s); } catch (_) {}
+  return s.split(/[/\\:]/).pop() || s;
+}
+
+// Android SAF: ফাইলের এক্সটেনশনের সাথে না মেলা পরিচিত mime দিলে নামের শেষে আলাদা এক্সটেনশন জোড়া লাগে
+// (যেমন "1.adoc.txt")। তাই শুধু মিলে যাওয়া ফরম্যাটে আসল mime, বাকিগুলোয় octet-stream।
+const SAFE_MIME_EXT = new Set(["txt", "html", "xml", "json", "csv", "docx", "odt"]);
+
+// আউটপুট ফাইল তৈরি ও সেভ; সেভ হওয়া ফাইলের নাম ফেরত দেয়
+async function saveOutput(folderId, baseName, text, formatId, source) {
+  const f = FORMAT_MAP[formatId] || FORMAT_MAP.txt;
+  const name = `${baseName}.${f.ext}`;
+  const data = f.build(text, displayName(source));
+  const bytes = typeof data === "string" ? new TextEncoder().encode(data) : data;
+  const mimeType = SAFE_MIME_EXT.has(f.ext) ? f.mime : "application/octet-stream";
+  await writeFile(folderId, name, bytes, { mimeType });
+  return name;
 }
 
 // "best" মডেল (বেশি নির্ভুল, তবে ডাউনলোড বড়)। সমস্যা হলে "" করলে ডিফল্ট মডেল চলবে।
@@ -212,8 +573,7 @@ btnPdf.addEventListener("click", async () => {
       try { await remove(res.fullPath); } catch (_) {}
       try { await remove(res.ocrPath); } catch (_) {}
 
-      const txtPath = `${i + 1}.${format}`;
-      await writeTextFile(folder.id, txtPath, formatOutput(text, format, imgPath));
+      const txtPath = await saveOutput(folder.id, `${i + 1}`, text, format, imgPath);
       log(`✔ টেক্সট ${i + 1}/${pageCount} সেভ: ${txtPath}`);
 
       setProgress("পেজ", i + 1, pageCount, 0, `${i + 1} পেজ সম্পন্ন`);
@@ -259,14 +619,14 @@ btnImg.addEventListener("click", async () => {
     for (let i = 0; i < total; i++) {
       ctx.index = i;
       const imgPath = selected[i];
-      const fileName = `${baseNameOf(imgPath, `image_${i + 1}`)}.${format}`;
+      const outBase = baseNameOf(imgPath, `image_${i + 1}`);
 
       setProgress("ছবি", i, total, 0, "ছবি পড়া হচ্ছে...");
       const bytes = await readFile(imgPath);
 
       const { data: { text } } = await worker.recognize(new Blob([bytes]));
 
-      await writeTextFile(folder.id, fileName, formatOutput(text, format, imgPath));
+      const fileName = await saveOutput(folder.id, outBase, text, format, imgPath);
       log(`✔ ${i + 1}/${total} সেভ: ${fileName}`);
 
       setProgress("ছবি", i + 1, total, 0, `${i + 1} ছবি সম্পন্ন`);
