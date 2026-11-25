@@ -25,7 +25,7 @@ const app = document.querySelector("#app");
 
 app.innerHTML = `
   <div style="max-width: 600px; margin: 0 auto; padding: 20px;">
-    <h1 style="font-size: 1.5rem; margin: 0 0 4px;">AQIS OCR</h1>
+    <h1 style="font-size: 1.5rem; margin: 0 0 4px;">PDF&amp;Image Converter</h1>
     <p style="color: #64748b; font-size: 0.9rem; margin: 0 0 16px;">PDF ও ছবি থেকে টেক্সট</p>
 
     <div style="background:#fff; padding:16px; border-radius:12px; margin-bottom:16px;">
@@ -543,7 +543,9 @@ async function saveOutput(folderId, baseName, text, formatId, source) {
   const data = f.build(text, displayName(source));
   const bytes = typeof data === "string" ? new TextEncoder().encode(data) : data;
   const mimeType = SAFE_MIME_EXT.has(f.ext) ? f.mime : "application/octet-stream";
-  await writeFile(folderId, name, bytes, { mimeType });
+  const opts = { mimeType };
+  if (name.includes("/")) opts.recursive = true; // সাবফোল্ডার না থাকলে বানাবে
+  await writeFile(folderId, name, bytes, opts);
   return name;
 }
 
@@ -600,6 +602,13 @@ btnPdf.addEventListener("click", async () => {
     const pageCount = await invoke("get_pdf_page_count", { pdfPath: localPdfPath });
     log(`মোট ${pageCount} পেজ পাওয়া গেছে।`);
 
+    // আউটপুট ফোল্ডার: pdfname_image (ছবি) ও pdfname_text (টেক্সট)
+    const stamp = new Date().toISOString().replace(/[-:T]/g, "").slice(0, 14);
+    const pdfBase = baseNameOf(selected, `pdf_${stamp}`);
+    const imageDir = `${pdfBase}_image`;
+    const textDir = `${pdfBase}_text`;
+    log(`ফোল্ডার: ${imageDir}, ${textDir}`);
+
     const ctx = { kind: "পেজ", index: 0, total: pageCount, base: 0.1 };
     setProgress("পেজ", 0, pageCount, 0, "OCR ইঞ্জিন লোড হচ্ছে...");
     worker = await makeWorker(langs, ctx);
@@ -608,7 +617,7 @@ btnPdf.addEventListener("click", async () => {
     for (let i = 0; i < pageCount; i++) {
       ctx.index = i;
 
-      setProgress("পেজ", i, pageCount, 0, "রেন্ডার হচ্ছে (৫০০ DPI)...");
+      setProgress("পেজ", i, pageCount, 0, "রেন্ডার হচ্ছে (৩০০ DPI)...");
       // Rust দুটো ফাইল cache-এ লেখে: fullPath (৫০০ DPI), ocrPath (৩০০ DPI)
       const res = await invoke("render_pdf_page", {
         pdfPath: localPdfPath,
@@ -616,11 +625,10 @@ btnPdf.addEventListener("click", async () => {
         outDir: cacheDir,
       });
 
-      const imgFileName = `${i + 1}.png`;
-      const imgPath = imgFileName;
+      const imgPath = `${imageDir}/${i + 1}.png`;
       setProgress("পেজ", i, pageCount, 0.05, "ছবি সেভ হচ্ছে...");
       let fullBytes = await readFile(res.fullPath);
-      await writeFile(folder.id, imgPath, fullBytes, { mimeType: "image/png" });
+      await writeFile(folder.id, imgPath, fullBytes, { mimeType: "image/png", recursive: true });
       fullBytes = null;
       log(`✔ ছবি ${i + 1}/${pageCount} সেভ: ${imgPath}`);
 
@@ -633,7 +641,7 @@ btnPdf.addEventListener("click", async () => {
       try { await remove(res.fullPath); } catch (_) {}
       try { await remove(res.ocrPath); } catch (_) {}
 
-      const txtPath = await saveOutput(folder.id, `${i + 1}`, text, format, imgPath);
+      const txtPath = await saveOutput(folder.id, `${textDir}/${i + 1}`, text, format, imgPath);
       log(`✔ টেক্সট ${i + 1}/${pageCount} সেভ: ${txtPath}`);
 
       setProgress("পেজ", i + 1, pageCount, 0, `${i + 1} পেজ সম্পন্ন`);
@@ -641,7 +649,6 @@ btnPdf.addEventListener("click", async () => {
     finishProgress("পেজ", pageCount);
     log("🎉 সম্পন্ন!");
     showInterstitialIfDue();
-    await maybeShowInterstitial();
   } catch (err) {
     log(`❌ ${err}`);
     console.error(err);
@@ -694,7 +701,6 @@ btnImg.addEventListener("click", async () => {
     finishProgress("ছবি", total);
     log("🎉 সম্পন্ন!");
     showInterstitialIfDue();
-    await maybeShowInterstitial();
   } catch (err) {
     log(`❌ ${err}`);
     console.error(err);
