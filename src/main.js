@@ -87,6 +87,8 @@ function log(msg) {
 function setBusy(busy) {
   btnPdf.disabled = busy;
   btnImg.disabled = busy;
+  // কাজ চলার সময় উপরে বড় বিজ্ঞাপন, শেষে নিচে ব্যানার
+  if (busy) enterWorkAds(); else leaveWorkAds();
 }
 
 // ---- Progress ----
@@ -288,12 +290,46 @@ btnImg.addEventListener("click", async () => {
 const ADS = {
   enabled: true,
   bannerId: "ca-app-pub-3940256099942544/9214589741", // টেস্ট: অ্যাডাপ্টিভ ব্যানার
+  // টেস্ট: ব্যানার-আইডি দিয়ে ৩০০×২৫০ চলে। আসল প্রকাশে AdMob-এ আলাদা "Banner" Ad Unit বানিয়ে বসান।
+  mrecId: "ca-app-pub-3940256099942544/6300978111",
   interstitialId: "ca-app-pub-3940256099942544/1033173712", // টেস্ট: ইন্টারস্টিশিয়াল
   interstitialMinGapMs: 3 * 60 * 1000, // দুই ফুলস্ক্রিন বিজ্ঞাপনের মাঝে ন্যূনতম ৩ মিনিট
 };
 let lastInterstitialAt = 0;
 
 const adsCall = (cmd, payload = {}) => invoke("ads_call", { cmd, payload });
+
+let adsReady = false;
+let adsChain = Promise.resolve(); // বিজ্ঞাপনের কল একটার পর একটা চলার জন্য
+const queueAds = (fn) => {
+  adsChain = adsChain.then(fn).catch((e) => console.warn("Ads:", e));
+  return adsChain;
+};
+
+// কাজ শুরু: নিচের ব্যানার সরিয়ে উপরে ৩০০×২৫০ বিজ্ঞাপন
+function enterWorkAds() {
+  if (!ADS.enabled || !adsReady) return;
+  queueAds(async () => {
+    await adsCall("hideBanner");
+    document.body.style.paddingBottom = "";
+    const r = await adsCall("showMrec", { unitId: ADS.mrecId });
+    if (r && r.height) {
+      document.body.style.paddingTop = `${Math.ceil(r.height + (r.topInset || 0)) + 8}px`;
+    }
+  });
+}
+
+// কাজ শেষ: উপরের বিজ্ঞাপন সরিয়ে নিচে ব্যানার ফেরত
+function leaveWorkAds() {
+  if (!ADS.enabled || !adsReady) return;
+  queueAds(async () => {
+    await adsCall("hideMrec");
+    document.body.style.paddingTop = "";
+    const b = await adsCall("showBanner", { unitId: ADS.bannerId });
+    if (b && b.height) document.body.style.paddingBottom = `${Math.ceil(b.height) + 8}px`;
+  });
+}
+
 
 function addPrivacyLink() {
   if (document.querySelector("#ads-privacy")) return;
@@ -311,6 +347,7 @@ async function initAds() {
   try {
     const r = await adsCall("init");
     if (!r || r.canRequestAds === false) return;
+    adsReady = true;
 
     const b = await adsCall("showBanner", { unitId: ADS.bannerId });
     // ব্যানার যাতে কনটেন্ট ঢেকে না দেয়
