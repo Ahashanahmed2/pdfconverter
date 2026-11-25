@@ -259,6 +259,40 @@ jobs:
           grep -n "APPLICATION_ID\|AD_ID" $APP/src/main/AndroidManifest.xml || { echo "ERROR: manifest patch failed"; exit 1; }
 
       # ==========================================
+      # 10.8 App icon + app name
+      # ==========================================
+      - name: Set app icon and name
+        env:
+          # & XML-এ লিখতে হয় &amp; হিসেবে
+          APP_LABEL: "PDF&amp;Image Converter"
+        run: |
+          set -e
+          # আইকন: রুটে app-icon.png থাকলে সেটা, নাহলে src-tauri/icons/icon.png
+          if [ -f app-icon.png ]; then SRC=app-icon.png; else SRC=src-tauri/icons/icon.png; fi
+          test -f "$SRC" || { echo "ERROR: icon not found ($SRC)"; exit 1; }
+          echo "Icon source: $SRC"
+          file "$SRC"
+          cp "$SRC" "$RUNNER_TEMP/app-icon.png"
+          # init-এর পরে চালালে Android-এর mipmap আইকনও নতুন করে লেখে
+          npx tauri icon "$RUNNER_TEMP/app-icon.png"
+          ls -la src-tauri/gen/android/app/src/main/res/mipmap-xxxhdpi/
+
+          # অ্যাপের নাম (লঞ্চারে যা দেখায়)
+          APP_LABEL="$APP_LABEL" python3 - << 'PY'
+          import os, re
+          p = "src-tauri/gen/android/app/src/main/res/values/strings.xml"
+          s = open(p, encoding="utf-8").read()
+          label = os.environ["APP_LABEL"]
+          for key in ("app_name", "main_activity_title"):
+              s = re.sub(r'(<string name="%s">)[^<]*(</string>)' % key,
+                         lambda m: m.group(1) + label + m.group(2), s)
+          open(p, "w", encoding="utf-8").write(s)
+          PY
+          echo "=== strings.xml ==="
+          cat src-tauri/gen/android/app/src/main/res/values/strings.xml
+          grep -q "PDF&amp;Image Converter" src-tauri/gen/android/app/src/main/res/values/strings.xml || { echo "ERROR: app name patch failed"; exit 1; }
+
+      # ==========================================
       # 11. Build Android APK
       # ==========================================
       - name: Build APK
