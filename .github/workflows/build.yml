@@ -202,6 +202,48 @@ jobs:
           ls -la "$KT_DIR"
 
       # ==========================================
+      # 10.7 Install AdMob plugin (banner + interstitial + consent)
+      # ==========================================
+      - name: Install AdMob plugin
+        env:
+          # GitHub → Settings → Variables → ADMOB_APP_ID (না দিলে Google-এর টেস্ট আইডি)
+          ADMOB_APP_ID: ${{ vars.ADMOB_APP_ID || 'ca-app-pub-3940256099942544~3347511713' }}
+        run: |
+          set -e
+          APP=src-tauri/gen/android/app
+          GRADLE=$APP/build.gradle.kts
+          MAIN=$(find $APP/src/main/java -name MainActivity.kt | head -n1)
+          KT_DIR=$(dirname "$MAIN")
+
+          cp src-tauri/android-src/AdsPlugin.kt "$KT_DIR/"
+
+          # Gradle dependency (24.0.0 — পুরনো Kotlin-এর সাথেও চলে)
+          sed -i '/^dependencies {/a\    implementation("com.google.android.gms:play-services-ads:24.0.0")' "$GRADLE"
+          sed -i '/^dependencies {/a\    implementation("com.google.android.ump:user-messaging-platform:3.1.0")' "$GRADLE"
+
+          # Manifest: AdMob App ID + AD_ID permission
+          python3 - << 'PY'
+          import os
+          p = "src-tauri/gen/android/app/src/main/AndroidManifest.xml"
+          s = open(p, encoding="utf-8").read()
+          app_id = os.environ["ADMOB_APP_ID"]
+          if "com.google.android.gms.ads.APPLICATION_ID" not in s:
+              perm = '    <uses-permission android:name="com.google.android.gms.permission.AD_ID" />\n'
+              s = s.replace("<application", perm + "    <application", 1)
+              meta = (
+                  '        <meta-data\n'
+                  '            android:name="com.google.android.gms.ads.APPLICATION_ID"\n'
+                  '            android:value="' + app_id + '" />\n'
+              )
+              s = s.replace("</application>", meta + "    </application>", 1)
+              open(p, "w", encoding="utf-8").write(s)
+          PY
+
+          echo "=== Verify AdMob patch ==="
+          grep -n "play-services-ads\|user-messaging" "$GRADLE" || { echo "ERROR: ads dependency missing"; exit 1; }
+          grep -n "APPLICATION_ID\|AD_ID" $APP/src/main/AndroidManifest.xml || { echo "ERROR: manifest patch failed"; exit 1; }
+
+      # ==========================================
       # 11. Build Android APK
       # ==========================================
       - name: Build APK
