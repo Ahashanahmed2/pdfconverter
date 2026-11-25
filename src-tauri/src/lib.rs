@@ -11,7 +11,7 @@ const DPI: f32 = 300.0;
 // অস্বাভাবিক বড় পেজে মেমরি বাঁচাতে সর্বোচ্চ দৈর্ঘ্য (পিক্সেল)
 const MAX_SIDE_PX: f32 = 12000.0;
 
-// ================= আপডেটার (Android Kotlin প্লাগইনের সেতু) =================
+// ============ Android Kotlin প্লাগইনের সেতু (আপডেটার + বিজ্ঞাপন) ============
 #[cfg(target_os = "android")]
 mod updater {
     use serde_json::{json, Value};
@@ -19,12 +19,15 @@ mod updater {
     use tauri::{AppHandle, Manager, Wry};
 
     pub struct UpdaterHandle(pub PluginHandle<Wry>);
+    pub struct AdsHandle(pub PluginHandle<Wry>);
 
     pub fn plugin() -> TauriPlugin<Wry> {
         Builder::<Wry>::new("apkupdater")
             .setup(|app, api| {
-                let handle = api.register_android_plugin("com.aqis.ocr", "UpdaterPlugin")?;
-                app.manage(UpdaterHandle(handle));
+                let updater = api.register_android_plugin("com.aqis.ocr", "UpdaterPlugin")?;
+                app.manage(UpdaterHandle(updater));
+                let ads = api.register_android_plugin("com.aqis.ocr", "AdsPlugin")?;
+                app.manage(AdsHandle(ads));
                 Ok(())
             })
             .build()
@@ -49,6 +52,35 @@ mod updater {
     #[tauri::command]
     pub async fn update_install(app: AppHandle) -> Result<Value, String> {
         call(&app, "install", json!({}))
+    }
+
+    // বিজ্ঞাপন: শুধু অনুমোদিত কমান্ড Kotlin-এ যায়
+    #[tauri::command]
+    pub async fn ads_call(
+        app: AppHandle,
+        cmd: String,
+        payload: Option<Value>,
+    ) -> Result<Value, String> {
+        const ALLOWED: [&str; 6] = [
+            "init",
+            "showBanner",
+            "hideBanner",
+            "loadInterstitial",
+            "showInterstitial",
+            "privacyOptions",
+        ];
+        if !ALLOWED.contains(&cmd.as_str()) {
+            return Err("অজানা বিজ্ঞাপন কমান্ড".into());
+        }
+        let payload = payload.unwrap_or_else(|| json!({}));
+        // সম্মতি ফর্মের জন্য অপেক্ষা করতে পারে, তাই আলাদা থ্রেডে
+        tauri::async_runtime::spawn_blocking(move || {
+            let h = app.state::<AdsHandle>();
+            h.0.run_mobile_plugin::<Value>(&cmd, payload)
+                .map_err(|e| e.to_string())
+        })
+        .await
+        .map_err(|e| e.to_string())?
     }
 }
 
@@ -75,6 +107,11 @@ mod updater {
 
     #[tauri::command]
     pub async fn update_install() -> Result<Value, String> {
+        Err("শুধু Android-এ সমর্থিত".into())
+    }
+
+    #[tauri::command]
+    pub async fn ads_call(_cmd: String, _payload: Option<Value>) -> Result<Value, String> {
         Err("শুধু Android-এ সমর্থিত".into())
     }
 }
@@ -170,7 +207,8 @@ pub fn run() {
             render_pdf_page,
             updater::update_download,
             updater::update_progress,
-            updater::update_install
+            updater::update_install,
+            updater::ads_call
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");
