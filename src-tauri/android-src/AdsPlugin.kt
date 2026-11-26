@@ -1,9 +1,12 @@
 package com.aqis.ocr
 
 import android.app.Activity
+import android.content.Intent
+import android.net.Uri
 import android.view.Gravity
 import android.view.ViewGroup
 import android.widget.FrameLayout
+import androidx.core.content.FileProvider
 import androidx.core.view.ViewCompat
 import androidx.core.view.WindowInsetsCompat
 import app.tauri.annotation.Command
@@ -25,15 +28,28 @@ import com.google.android.ump.ConsentForm
 import com.google.android.ump.ConsentInformation
 import com.google.android.ump.ConsentRequestParameters
 import com.google.android.ump.UserMessagingPlatform
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.GlobalScope
+import kotlinx.coroutines.launch
+import java.io.File
+import java.io.FileOutputStream
+import java.net.HttpURLConnection
+import java.net.URL
 
 @InvokeArg
 class UnitArgs {
     lateinit var unitId: String
 }
 
+@InvokeArg
+class DownloadArgs {
+    var url: String = ""
+}
+
 @TauriPlugin
 class AdsPlugin(private val activity: Activity) : Plugin(activity) {
 
+    // ==================== ADS STATE ====================
     private var sdkStarted = false
     private var banner: AdView? = null
     private var mrec: AdView? = null
@@ -41,7 +57,16 @@ class AdsPlugin(private val activity: Activity) : Plugin(activity) {
     private var interstitialLoading = false
     private var interstitialUnitId: String? = null
 
-    // ---------- ১. সম্মতি (UMP) + SDK চালু ----------
+    // ==================== UPDATE STATE ====================
+    @Volatile private var dlState = "idle"
+    @Volatile private var dlBytes = 0L
+    @Volatile private var dlTotal = 0L
+    @Volatile private var dlError = ""
+    @Volatile private var dlPath = ""
+
+    // ======================================================
+    //  1. সম্মতি (UMP) + SDK চালু
+    // ======================================================
     @Command
     fun init(invoke: Invoke) {
         activity.runOnUiThread {
@@ -91,14 +116,16 @@ class AdsPlugin(private val activity: Activity) : Plugin(activity) {
     private fun canRequestAds(): Boolean =
         UserMessagingPlatform.getConsentInformation(activity).canRequestAds()
 
-    // ---------- ২. ব্যানার (নিচে লেগে থাকে) ----------
+    // ======================================================
+    //  2. ব্যানার (নিচে লেগে থাকে)
+    // ======================================================
     @Command
     fun showBanner(invoke: Invoke) {
         val args = invoke.parseArgs(UnitArgs::class.java)
         activity.runOnUiThread {
             try {
                 if (!canRequestAds()) {
-                    invoke.reject("সম্মতি ছাড়া বিজ্ঞাপন দেখানো যাবে না")
+                    invoke.reject("Consent not given")
                     return@runOnUiThread
                 }
                 startSdk()
@@ -124,7 +151,6 @@ class AdsPlugin(private val activity: Activity) : Plugin(activity) {
                 )
                 root.addView(adView, lp)
 
-                // নেভিগেশন বারের নিচে ঢেকে গেলে ওপরে তুলে ধরি
                 ViewCompat.setOnApplyWindowInsetsListener(adView) { v, insets ->
                     val bars = insets.getInsets(WindowInsetsCompat.Type.systemBars())
                     val p = v.layoutParams as FrameLayout.LayoutParams
@@ -140,7 +166,7 @@ class AdsPlugin(private val activity: Activity) : Plugin(activity) {
                 banner = adView
 
                 val o = JSObject()
-                o.put("height", size.height) // dp
+                o.put("height", size.height)
                 invoke.resolve(o)
             } catch (e: Exception) {
                 invoke.reject(e.message ?: e.toString())
@@ -160,7 +186,9 @@ class AdsPlugin(private val activity: Activity) : Plugin(activity) {
         }
     }
 
-    // ---------- ২.৫ মিডিয়াম রেক্টাঙ্গেল (৩০০×২৫০) — কাজ চলার সময় পর্দার উপরে ----------
+    // ======================================================
+    //  2.5 Media Rectangle (300×250) — top during work
+    // ======================================================
     private fun removeMrec() {
         mrec?.let {
             (it.parent as? ViewGroup)?.removeView(it)
@@ -175,7 +203,7 @@ class AdsPlugin(private val activity: Activity) : Plugin(activity) {
         activity.runOnUiThread {
             try {
                 if (!canRequestAds()) {
-                    invoke.reject("সম্মতি ছাড়া বিজ্ঞাপন দেখানো যাবে না")
+                    invoke.reject("Consent not given")
                     return@runOnUiThread
                 }
                 startSdk()
@@ -183,7 +211,6 @@ class AdsPlugin(private val activity: Activity) : Plugin(activity) {
 
                 val root = activity.findViewById<ViewGroup>(android.R.id.content)
                 val density = activity.resources.displayMetrics.density
-                // স্ট্যাটাস বারের নিচে বসানোর জন্য
                 val topPx = ViewCompat.getRootWindowInsets(root)
                     ?.getInsets(WindowInsetsCompat.Type.systemBars())?.top ?: 0
 
@@ -203,8 +230,8 @@ class AdsPlugin(private val activity: Activity) : Plugin(activity) {
                 mrec = adView
 
                 val o = JSObject()
-                o.put("height", AdSize.MEDIUM_RECTANGLE.height) // dp
-                o.put("topInset", (topPx / density).toInt())    // dp
+                o.put("height", AdSize.MEDIUM_RECTANGLE.height)
+                o.put("topInset", (topPx / density).toInt())
                 invoke.resolve(o)
             } catch (e: Exception) {
                 invoke.reject(e.message ?: e.toString())
@@ -220,7 +247,9 @@ class AdsPlugin(private val activity: Activity) : Plugin(activity) {
         }
     }
 
-    // ---------- ৩. ইন্টারস্টিশিয়াল (পুরো পর্দা) ----------
+    // ======================================================
+    //  3. Interstitial (fullscreen)
+    // ======================================================
     @Command
     fun loadInterstitial(invoke: Invoke) {
         val args = invoke.parseArgs(UnitArgs::class.java)
@@ -293,7 +322,9 @@ class AdsPlugin(private val activity: Activity) : Plugin(activity) {
         }
     }
 
-    // ---------- ৪. গোপনীয়তা বিকল্প (ইউরোপ/UK-এর জন্য বাধ্যতামূলক) ----------
+    // ======================================================
+    //  4. Privacy options (EU/UK)
+    // ======================================================
     @Command
     fun privacyOptions(invoke: Invoke) {
         activity.runOnUiThread {
@@ -305,6 +336,120 @@ class AdsPlugin(private val activity: Activity) : Plugin(activity) {
             } catch (e: Exception) {
                 invoke.reject(e.message ?: e.toString())
             }
+        }
+    }
+
+    // ======================================================
+    //  5. UPDATE: download (native HTTP, no CORS)
+    // ======================================================
+    @Command
+    fun update_download(invoke: Invoke) {
+        val url = invoke.parseArgs(DownloadArgs::class.java).url
+        if (url.isBlank() || !url.startsWith("https://", ignoreCase = true)) {
+            invoke.reject("Invalid URL")
+            return
+        }
+
+        GlobalScope.launch(Dispatchers.IO) {
+            try {
+                dlState = "downloading"
+                dlBytes = 0
+                dlTotal = 0
+                dlError = ""
+                dlPath = ""
+
+                val conn = (URL(url).openConnection() as HttpURLConnection).apply {
+                    instanceFollowRedirects = true
+                    connectTimeout = 60_000
+                    readTimeout = 60_000
+                    setRequestProperty("User-Agent", "AQIS-Updater/1.0")
+                }
+
+                val code = conn.responseCode
+                if (code != HttpURLConnection.HTTP_OK) {
+                    dlState = "error"
+                    dlError = "HTTP $code"
+                    invoke.reject("HTTP $code")
+                    return@launch
+                }
+
+                dlTotal = conn.contentLengthLong
+                val outFile = File(activity.cacheDir, "update.apk")
+                if (outFile.exists()) outFile.delete()
+
+                conn.inputStream.use { input ->
+                    FileOutputStream(outFile).use { out ->
+                        val buf = ByteArray(64 * 1024)
+                        var n: Int
+                        while (input.read(buf).also { n = it } != -1) {
+                            out.write(buf, 0, n)
+                            dlBytes += n
+                        }
+                    }
+                }
+                conn.disconnect()
+
+                if (outFile.length() == 0L) {
+                    dlState = "error"
+                    dlError = "Empty file"
+                    invoke.reject("Downloaded file is empty")
+                    return@launch
+                }
+
+                dlPath = outFile.absolutePath
+                dlState = "done"
+                invoke.resolve()
+            } catch (e: Exception) {
+                dlState = "error"
+                dlError = e.message ?: "Unknown error"
+                invoke.reject(e.message ?: "Download failed")
+            }
+        }
+    }
+
+    // ======================================================
+    //  6. UPDATE: progress polling
+    // ======================================================
+    @Command
+    fun update_progress(invoke: Invoke) {
+        val o = JSObject()
+        o.put("state", dlState)
+        o.put("downloaded", dlBytes)
+        o.put("total", dlTotal)
+        if (dlError.isNotEmpty()) o.put("error", dlError)
+        if (dlPath.isNotEmpty()) o.put("path", dlPath)
+        invoke.resolve(o)
+    }
+
+    // ======================================================
+    //  7. UPDATE: open installer
+    // ======================================================
+    @Command
+    fun update_install(invoke: Invoke) {
+        val apkFile = if (dlPath.isNotEmpty()) File(dlPath)
+                      else File(activity.cacheDir, "update.apk")
+
+        if (!apkFile.exists()) {
+            invoke.reject("APK not found. Download first.")
+            return
+        }
+
+        try {
+            val uri: Uri = FileProvider.getUriForFile(
+                activity,
+                "${activity.packageName}.updatefileprovider",
+                apkFile
+            )
+
+            val intent = Intent(Intent.ACTION_VIEW).apply {
+                setDataAndType(uri, "application/vnd.android.package-archive")
+                addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION)
+                addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+            }
+            activity.startActivity(intent)
+            invoke.resolve()
+        } catch (e: Exception) {
+            invoke.reject(e.message ?: "Install failed")
         }
     }
 }
