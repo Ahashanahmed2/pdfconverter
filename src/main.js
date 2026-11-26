@@ -1156,7 +1156,6 @@ function isNewer(remote, local) {
 function showUpdateModal(info, currentVer) {
   if (document.querySelector("#update-modal")) return;
 
-  const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
   const mb = (n) => (n / 1048576).toFixed(1);
 
   const overlay = document.createElement("div");
@@ -1232,20 +1231,9 @@ function showUpdateModal(info, currentVer) {
   }
 
   let downloaded = false; // true once the download finishes
+  let apkPath = null;     // cache path of the downloaded APK
 
-  async function doInstall() {
-    const r = await invoke("update_install");
-    if (r && r.needsPermission) {
-      setMsg("Enable “Allow from this source” in Settings, come back to the app, and tap “Install” again.", false);
-      btnUpdate.disabled = false;
-      btnUpdate.textContent = "Install";
-      return;
-    }
-    setMsg("Installer opened. Tap “Install/Update”.", false);
-    btnUpdate.disabled = false;
-    btnUpdate.textContent = "Install again";
-  }
-
+  // Download entirely in JS (fetch + fs) — no native "update_download" command needed
   async function doDownload() {
     if (!/^https:\/\//i.test(info.apk_url)) throw new Error("Invalid APK link");
     progWrap.style.display = "block";
@@ -1253,28 +1241,75 @@ function showUpdateModal(info, currentVer) {
     progPct.textContent = "0%";
     fill.style.width = "0%";
 
-    await invoke("update_download", { url: info.apk_url });
+    const cacheDir = await appCacheDir();
+    apkPath = await join(cacheDir, "update.apk");
+    try { await remove(apkPath); } catch (_) {} // clear any stale partial file
 
-    // Progress polling
-    while (true) {
-      const p = await invoke("update_progress");
-      if (p.state === "error") throw new Error(p.error || "Download failed");
-      if (p.total > 0) {
-        const pct = Math.min(100, Math.round((p.downloaded / p.total) * 100));
-        fill.style.width = `${pct}%`;
-        progPct.textContent = `${pct}%`;
-        progLabel.textContent = `${mb(p.downloaded)} / ${mb(p.total)} MB`;
-      } else {
-        progLabel.textContent = `${mb(p.downloaded)} MB`;
-        progPct.textContent = "";
+    const res = await fetch(info.apk_url, { cache: "no-store" });
+    if (!res.ok) throw new Error(`HTTP ${res.status}`);
+    const total = Number(res.headers.get("content-length")) || 0;
+
+    if (res.body && typeof res.body.getReader === "function") {
+      // Streaming: update progress per chunk
+      const reader = res.body.getReader();
+      const chunks = [];
+      let got = 0;
+      while (true) {
+        const { done, value } = await reader.read();
+        if (done) break;
+        chunks.push(value);
+        got += value.length;
+        if (total > 0) {
+          const pct = Math.min(100, Math.round((got / total) * 100));
+          fill.style.width = `${pct}%`;
+          progPct.textContent = `${pct}%`;
+          progLabel.textContent = `${mb(got)} / ${mb(total)} MB`;
+        } else {
+          progLabel.textContent = `${mb(got)} MB`;
+        }
       }
-      if (p.state === "done") break;
-      await sleep(400);
+      const buf = new Uint8Array(got);
+      let off = 0;
+      for (const c of chunks) { buf.set(c, off); off += c.length; }
+      await fsWriteFile(apkPath, buf);
+    } else {
+      // Fallback: single blob
+      const buf = new Uint8Array(await res.arrayBuffer());
+      await fsWriteFile(apkPath, buf);
+      progLabel.textContent = `${mb(buf.length)} MB`;
     }
+
     fill.style.width = "100%";
     progPct.textContent = "100%";
     progLabel.textContent = "Download complete";
     downloaded = true;
+  }
+
+  // Try update_install with a path arg first; fall back to no-arg if the command
+  // doesn't expect one (so both possible Rust signatures work).
+  async function doInstall() {
+    const attempts = [];
+    if (apkPath) { attempts.push({ path: apkPath }, { apkPath }); }
+    attempts.push({});
+    let lastErr;
+    for (const args of attempts) {
+      try {
+        const r = await invoke("update_install", args);
+        if (r && r.needsPermission) {
+          setMsg("Enable “Allow from this source” in Settings, come back to the app, and tap “Install” again.", false);
+          btnUpdate.disabled = false;
+          btnUpdate.textContent = "Install";
+          return;
+        }
+        setMsg("Installer opened. Tap “Install/Update”.", false);
+        btnUpdate.disabled = false;
+        btnUpdate.textContent = "Install again";
+        return;
+      } catch (e) {
+        lastErr = e;
+      }
+    }
+    throw lastErr;
   }
 
   btnUpdate.addEventListener("click", async () => {
@@ -1300,6 +1335,7 @@ function showUpdateModal(info, currentVer) {
   overlay.appendChild(card);
   document.body.appendChild(overlay);
 }
+
 
 async function checkForUpdate() {
   try {
