@@ -1,4 +1,4 @@
-// ---- Error capture (সবার আগে) ----
+// ---- Error capture (first) ----
 window.addEventListener("error", (e) => {
   const app = document.querySelector("#app");
   if (app) {
@@ -26,46 +26,46 @@ const app = document.querySelector("#app");
 app.innerHTML = `
   <div style="max-width: 600px; margin: 0 auto; padding: 20px;">
     <h1 style="font-size: 1.5rem; margin: 0 0 4px;">PDF&amp;Image Converter</h1>
-    <p style="color: #64748b; font-size: 0.9rem; margin: 0 0 16px;">PDF ও ছবি থেকে টেক্সট, ছবির ফরম্যাট বদল</p>
+    <p style="color: #64748b; font-size: 0.9rem; margin: 0 0 16px;">Extract text from PDF &amp; images, convert image formats</p>
 
     <div style="background:#fff; padding:16px; border-radius:12px; margin-bottom:16px;">
       <div style="display:flex; flex-wrap:wrap; gap:12px; margin-bottom:14px;">
         <div style="flex:1 1 100%;">
-          <label style="font-size:.85rem;font-weight:600;">ফরম্যাট</label>
+          <label style="font-size:.85rem;font-weight:600;">Format</label>
           <select id="format" style="width:100%; padding:8px; margin-top:4px;">
           </select>
         </div>
         <div style="flex:1 1 100%;">
-          <label style="font-size:.85rem;font-weight:600;">ভাষা <span style="font-weight:400;color:#64748b;">(সর্বোচ্চ ৩টি)</span></label>
+          <label style="font-size:.85rem;font-weight:600;">Language <span style="font-weight:400;color:#64748b;">(max 3)</span></label>
           <button id="lang-btn" type="button" style="display:block; width:100%; padding:10px; margin-top:4px; text-align:left; border:1px solid #767676; border-radius:4px; background:#fff; color:#0f172a; font-size:1rem; white-space:nowrap; overflow:hidden; text-overflow:ellipsis;">—</button>
           <input type="hidden" id="langs" value="eng+ben">
         </div>
       </div>
       <div style="margin-bottom:14px;">
-        <label style="font-size:.85rem;font-weight:600;">ছবি বোতামে কী হবে</label>
+        <label style="font-size:.85rem;font-weight:600;">Image button action</label>
         <select id="img-mode" style="width:100%; padding:8px; margin-top:4px;">
-          <option value="ocr">ছবি থেকে টেক্সট (OCR)</option>
-          <option value="convert">ছবির ফরম্যাট বদল (jpg → png ইত্যাদি)</option>
+          <option value="ocr">Image to Text (OCR)</option>
+          <option value="convert">Image Format Conversion (jpg → png, etc.)</option>
         </select>
       </div>
       <div id="convert-opts" style="display:none; flex-wrap:wrap; gap:12px; margin-bottom:14px;">
         <div style="flex:1 1 100%;">
-          <label style="font-size:.85rem;font-weight:600;">নতুন ফরম্যাট</label>
+          <label style="font-size:.85rem;font-weight:600;">New format</label>
           <select id="img-target" style="width:100%; padding:8px; margin-top:4px;"></select>
         </div>
         <div id="quality-wrap" style="flex:1 1 100%; display:none;">
-          <label style="font-size:.85rem;font-weight:600;">মান</label>
+          <label style="font-size:.85rem;font-weight:600;">Quality</label>
           <select id="img-quality" style="width:100%; padding:8px; margin-top:4px;">
-            <option value="1">সর্বোচ্চ (১০০%)</option>
-            <option value="0.92" selected>ভালো (৯২%)</option>
-            <option value="0.8">মাঝারি (৮০%)</option>
-            <option value="0.6">ছোট ফাইল (৬০%)</option>
+            <option value="1">Highest (100%)</option>
+            <option value="0.92" selected>Good (92%)</option>
+            <option value="0.8">Medium (80%)</option>
+            <option value="0.6">Small file (60%)</option>
           </select>
         </div>
       </div>
       <div style="display:flex; gap:10px;">
         <button id="btn-pdf" style="flex:1; padding:12px; background:#2563eb; color:#fff; border:none; border-radius:8px; font-weight:600;">PDF</button>
-        <button id="btn-img" style="flex:1; padding:12px; background:#059669; color:#fff; border:none; border-radius:8px; font-weight:600;">ছবি</button>
+        <button id="btn-img" style="flex:1; padding:12px; background:#059669; color:#fff; border:none; border-radius:8px; font-weight:600;">Image</button>
       </div>
     </div>
 
@@ -81,7 +81,7 @@ app.innerHTML = `
     </div>
 
     <div style="background:#0f172a; color:#e2e8f0; padding:14px; border-radius:12px;">
-      <pre id="status" style="margin:0; white-space:pre-wrap; font-size:.85rem; max-height:280px; overflow-y:auto;">প্রস্তুত।</pre>
+      <pre id="status" style="margin:0; white-space:pre-wrap; font-size:.85rem; max-height:280px; overflow-y:auto;">Ready.</pre>
     </div>
   </div>
 `;
@@ -106,17 +106,17 @@ function setBusy(busy) {
   document.querySelector("#format").disabled = busy;
   document.querySelector("#lang-btn").disabled = busy;
   for (const id of ["#img-mode", "#img-target", "#img-quality"]) document.querySelector(id).disabled = busy;
-  // কাজ চলার সময় উপরে বড় বিজ্ঞাপন, শেষে নিচে ব্যানার
+  // While working: large ad on top; when done: banner at bottom
   if (busy) enterWorkAds(); else leaveWorkAds();
 }
 
-// ================= ভাষা নির্বাচন (Tesseract-এর সব ভাষা, সর্বোচ্চ ৩টি একসাথে) =================
+// ================= Language selection (all Tesseract languages, max 3 at once) =================
 const MAX_LANGS = 3;
-// [কোড, ইংরেজি নাম, নিজস্ব নাম]
+// [code, English name, native name]
 const LANGUAGES = [
   ["afr", "Afrikaans", "Afrikaans"], ["amh", "Amharic", "አማርኛ"], ["ara", "Arabic", "العربية"],
   ["asm", "Assamese", "অসমীয়া"], ["aze", "Azerbaijani", "Azərbaycan"], ["aze_cyrl", "Azerbaijani (Cyrillic)", ""],
-  ["bel", "Belarusian", "Беларуская"], ["ben", "Bengali", "বাংলা"], ["bod", "Tibetan", "བོད་ཡིག"],
+  ["bel", "Belarusian", "Беларуская"], ["ben", "Bengali", ""], ["bod", "Tibetan", "བོད་ཡིག"],
   ["bos", "Bosnian", "Bosanski"], ["bul", "Bulgarian", "Български"], ["cat", "Catalan", "Català"],
   ["ceb", "Cebuano", ""], ["ces", "Czech", "Čeština"], ["chi_sim", "Chinese (Simplified)", "简体中文"],
   ["chi_tra", "Chinese (Traditional)", "繁體中文"], ["chr", "Cherokee", "ᏣᎳᎩ"], ["cym", "Welsh", "Cymraeg"],
@@ -192,14 +192,14 @@ function openLangModal() {
   const head = document.createElement("div");
   head.style.cssText = "padding:16px 16px 8px;";
   const title = document.createElement("div");
-  title.textContent = `ভাষা বাছুন (সর্বোচ্চ ${MAX_LANGS}টি)`;
+  title.textContent = `Choose languages (max ${MAX_LANGS})`;
   title.style.cssText = "font-size:1.1rem; font-weight:700; margin-bottom:4px;";
   const hint = document.createElement("div");
-  hint.textContent = "একই PDF/ছবিতে একাধিক ভাষা থাকলে সবগুলো বাছুন। যত বেশি ভাষা, তত ধীর ও বেশি মেমরি লাগে।";
+  hint.textContent = "If the PDF/image contains multiple languages, select all of them. More languages = slower and more memory.";
   hint.style.cssText = "font-size:.78rem; color:#64748b; margin-bottom:10px;";
   const search = document.createElement("input");
   search.type = "search";
-  search.placeholder = "খুঁজুন (নাম বা কোড)";
+  search.placeholder = "Search (name or code)";
   search.style.cssText =
     "width:100%; box-sizing:border-box; padding:10px; border:1px solid #cbd5e1; border-radius:8px; font-size:1rem;";
   head.append(title, hint, search);
@@ -214,11 +214,11 @@ function openLangModal() {
   const btns = document.createElement("div");
   btns.style.cssText = "display:flex; gap:10px;";
   const btnOk = document.createElement("button");
-  btnOk.textContent = "ঠিক আছে";
+  btnOk.textContent = "OK";
   btnOk.style.cssText =
     "flex:1; padding:12px; background:#2563eb; color:#fff; border:none; border-radius:8px; font-weight:600;";
   const btnCancel = document.createElement("button");
-  btnCancel.textContent = "বাতিল";
+  btnCancel.textContent = "Cancel";
   btnCancel.style.cssText =
     "padding:12px 18px; background:#e2e8f0; color:#0f172a; border:none; border-radius:8px; font-weight:600;";
   btns.append(btnOk, btnCancel);
@@ -259,7 +259,7 @@ function openLangModal() {
       row.append(cb, name);
       list.appendChild(row);
     }
-    count.textContent = `নির্বাচিত: ${pick.length}/${MAX_LANGS}  ${pick.map(langLabel).join(" + ")}`;
+    count.textContent = `Selected: ${pick.length}/${MAX_LANGS}  ${pick.map(langLabel).join(" + ")}`;
     btnOk.disabled = pick.length === 0;
     btnOk.style.opacity = pick.length === 0 ? ".5" : "1";
   }
@@ -283,7 +283,7 @@ document.querySelector("#lang-btn").addEventListener("click", openLangModal);
 applyLangs();
 
 // ---- Progress ----
-// done = সম্পন্ন আইটেম সংখ্যা, frac = বর্তমান আইটেমের অগ্রগতি (0..1)
+// done = number of completed items, frac = progress of the current item (0..1)
 function setProgress(kind, done, total, frac, sub) {
   const pct = Math.min(100, Math.round(((done + frac) / total) * 100));
   const current = Math.min(done + 1, total);
@@ -296,13 +296,13 @@ function setProgress(kind, done, total, frac, sub) {
 
 function finishProgress(kind, total) {
   progressBox.style.display = "block";
-  progressLabel.textContent = `${kind} ${total}/${total} সম্পন্ন`;
+  progressLabel.textContent = `${kind} ${total}/${total} done`;
   progressPct.textContent = "100%";
   progressBar.style.width = "100%";
   progressSub.textContent = "";
 }
 
-// content:// URI থেকে ফাইলের নাম (এক্সটেনশন ছাড়া) বের করি
+// Get file name (without extension) from a content:// URI
 function baseNameOf(p, fallback) {
   let s = p;
   try { s = decodeURIComponent(p); } catch (_) {}
@@ -311,7 +311,7 @@ function baseNameOf(p, fallback) {
   return s;
 }
 
-// ---------- ZIP (স্টোর-মোড) — DOCX/ODT-এর জন্য, বাইরের লাইব্রেরি ছাড়া ----------
+// ---------- ZIP (store mode) — for DOCX/ODT, without external libraries ----------
 const _enc = new TextEncoder();
 const strToU8 = (s) => _enc.encode(s);
 
@@ -331,7 +331,7 @@ function crc32(buf) {
   return (c ^ 0xffffffff) >>> 0;
 }
 
-// files: { "নাম": Uint8Array | [Uint8Array, opts] } — ঢোকানোর ক্রমই ফাইলের ক্রম
+// files: { "name": Uint8Array | [Uint8Array, opts] } — insertion order is the file order
 function zipSync(files) {
   const u16 = (v) => [v & 255, (v >>> 8) & 255];
   const u32 = (v) => [v & 255, (v >>> 8) & 255, (v >>> 16) & 255, (v >>> 24) & 255];
@@ -372,7 +372,7 @@ function zipSync(files) {
   return out;
 }
 
-// ================= আউটপুট ফরম্যাট (Word থেকে Linux-এর সব টেক্সট ফরম্যাট) =================
+// ================= Output formats (from Word to every Linux text format) =================
 const xmlEsc = (s) =>
   String(s)
     .replace(/[\x00-\x08\x0B\x0C\x0E-\x1F]/g, "")
@@ -383,14 +383,14 @@ const xmlEsc = (s) =>
 
 const RTL_RE = /[\u0590-\u08FF\uFB1D-\uFDFF\uFE70-\uFEFF]/;
 
-// টেক্সটকে অনুচ্ছেদে ভাগ: ফাঁকা লাইনে অনুচ্ছেদ, এক লাইনের বিরতি লাইন-ব্রেক
+// Split text into paragraphs: blank line = new paragraph, single line break = line break
 const toParagraphs = (text) =>
   String(text).replace(/\r\n?/g, "\n").trim().split(/\n\s*\n/).map((p) => p.split("\n").map((l) => l.trimEnd()));
 
-// CSV/TSV ঘর
+// CSV/TSV cell
 const csvCell = (s) => `"${String(s).replace(/"/g, '""')}"`;
 
-// RTF: ASCII-র বাইরের অক্ষর \uN? আকারে
+// RTF: characters outside ASCII as \uN?
 function rtfEsc(s) {
   let out = "";
   for (let i = 0; i < s.length; i++) {
@@ -405,7 +405,7 @@ function rtfEsc(s) {
   return out;
 }
 
-// LaTeX বিশেষ অক্ষর
+// LaTeX special characters
 const texEsc = (s) =>
   String(s)
     .replace(/\\/g, "\\textbackslash{}")
@@ -415,9 +415,9 @@ const texEsc = (s) =>
 
 const bodyText = (text) => String(text).replace(/\r\n?/g, "\n").trim();
 
-// id, লেবেল, এক্সটেনশন, mime, binary?, build(text, source)
+// id, label, extension, mime, binary?, build(text, source)
 const FORMATS = [
-  { id: "txt", label: "TXT — সাধারণ টেক্সট", ext: "txt", mime: "text/plain",
+  { id: "txt", label: "TXT — Plain Text", ext: "txt", mime: "text/plain",
     build: (t) => bodyText(t) + "\n" },
   { id: "md", label: "Markdown (.md)", ext: "md", mime: "text/markdown",
     build: (t, src) => `# OCR\n\n**Source:** \`${src}\`\n\n${bodyText(t)}\n` },
@@ -451,7 +451,7 @@ const FORMATS = [
       bodyText(t).split("\n").map((l, i) => `${src}\t${i + 1}\t${l.replace(/\t/g, " ")}`).join("\n") + "\n" },
   { id: "tex", label: "LaTeX (.tex, XeLaTeX)", ext: "tex", mime: "application/x-tex",
     build: (t, src) =>
-      `% XeLaTeX বা LuaLaTeX দিয়ে কম্পাইল করুন (ইউনিকোড/বাংলা সমর্থনের জন্য)\n` +
+      `% Compile with XeLaTeX or LuaLaTeX (for Unicode/Bengali support)\n` +
       `\\documentclass{article}\n\\usepackage{fontspec}\n\\begin{document}\n` +
       `% Source: ${texEsc(src)}\n` +
       toParagraphs(t).map((p) => p.map(texEsc).join(" \\\\\n")).join("\n\n") +
@@ -506,7 +506,7 @@ const FORMATS = [
         `<office:body><office:text>${paras}</office:text></office:body></office:document-content>`;
       const mt = "application/vnd.oasis.opendocument.text";
       return zipSync({
-        // mimetype সবার আগে ও সংকোচন ছাড়া থাকতে হয়
+        // mimetype must be the first entry and uncompressed
         "mimetype": [strToU8(mt), { level: 0 }],
         "META-INF/manifest.xml": strToU8(
           `<?xml version="1.0" encoding="UTF-8"?>` +
@@ -517,8 +517,8 @@ const FORMATS = [
         "content.xml": strToU8(content),
       });
     } },
-  // Word-এর পুরনো .doc ফরম্যাট: আসলে RTF, Word সরাসরি খুলতে পারে
-  { id: "doc", label: "MS Word 97-2003 (.doc, RTF-ভিত্তিক)", ext: "doc", mime: "application/msword",
+  // Old Word .doc format: actually RTF, which Word opens directly
+  { id: "doc", label: "MS Word 97-2003 (.doc, RTF-based)", ext: "doc", mime: "application/msword",
     build: (t, s) => FORMAT_MAP.rtf.build(t, s) },
   { id: "log", label: "LOG (.log)", ext: "log", mime: "text/plain",
     build: (t, s) => `# ${s}\n${bodyText(t)}\n` },
@@ -530,7 +530,7 @@ const FORMATS = [
 ];
 const FORMAT_MAP = Object.fromEntries(FORMATS.map((f) => [f.id, f]));
 
-// ফরম্যাট তালিকা পূরণ
+// Fill the format list
 (function fillFormats() {
   const sel = document.querySelector("#format");
   for (const f of FORMATS) {
@@ -548,18 +548,18 @@ const FORMAT_MAP = Object.fromEntries(FORMATS.map((f) => [f.id, f]));
   });
 })();
 
-// ফাইলের দেখানোর নাম (এক্সটেনশনসহ), content:// URI থেকে
+// Display name of a file (with extension), from a content:// URI
 function displayName(p) {
   let s = String(p);
   try { s = decodeURIComponent(s); } catch (_) {}
   return s.split(/[/\\:]/).pop() || s;
 }
 
-// Android SAF: ফাইলের এক্সটেনশনের সাথে না মেলা পরিচিত mime দিলে নামের শেষে আলাদা এক্সটেনশন জোড়া লাগে
-// (যেমন "1.adoc.txt")। তাই শুধু মিলে যাওয়া ফরম্যাটে আসল mime, বাকিগুলোয় octet-stream।
+// Android SAF: when the extension doesn't match a known mime, an extra extension gets appended to the name
+// (e.g. "1.adoc.txt"). So only matching formats use the real mime, others use octet-stream.
 const SAFE_MIME_EXT = new Set(["txt", "html", "xml", "json", "csv", "docx", "odt"]);
 
-// আউটপুট ফাইল তৈরি ও সেভ; সেভ হওয়া ফাইলের নাম ফেরত দেয়
+// Create and save the output file; returns the saved file name
 async function saveOutput(folderId, baseName, text, formatId, source) {
   const f = FORMAT_MAP[formatId] || FORMAT_MAP.txt;
   const name = `${baseName}.${f.ext}`;
@@ -567,29 +567,29 @@ async function saveOutput(folderId, baseName, text, formatId, source) {
   const bytes = typeof data === "string" ? new TextEncoder().encode(data) : data;
   const mimeType = SAFE_MIME_EXT.has(f.ext) ? f.mime : "application/octet-stream";
   const opts = { mimeType };
-  if (name.includes("/")) opts.recursive = true; // সাবফোল্ডার না থাকলে বানাবে
+  if (name.includes("/")) opts.recursive = true; // create subfolders if missing
   await writeFile(folderId, name, bytes, opts);
   return name;
 }
 
-// "best" মডেল (বেশি নির্ভুল, তবে ডাউনলোড বড়)। সমস্যা হলে "" করলে ডিফল্ট মডেল চলবে।
+// "best" model (more accurate, but larger download). If there are issues, set "" to use the default model.
 const TESS_LANG_PATH = "https://tessdata.projectnaptha.com/4.0.0_best";
 
-// একটাই worker বানাই; logger দিয়ে OCR-এর % আপডেট হয়
-// ctx = { kind, index, total, base } — base = OCR শুরুর আগে কত অংশ শেষ (0..1)
+// Create a single worker; the logger updates OCR %
+// ctx = { kind, index, total, base } — base = fraction completed before OCR starts (0..1)
 async function makeWorker(langs, ctx) {
   const Tesseract = (await import("tesseract.js")).default;
   const opts = {
     logger: (m) => {
       if (m.status === "recognizing text") {
         const frac = ctx.base + (1 - ctx.base) * m.progress;
-        setProgress(ctx.kind, ctx.index, ctx.total, frac, "OCR চলছে...");
+        setProgress(ctx.kind, ctx.index, ctx.total, frac, "OCR running...");
       }
     },
   };
   if (TESS_LANG_PATH) opts.langPath = TESS_LANG_PATH;
   const worker = await Tesseract.createWorker(langs, 1, opts);
-  // টেবিলের কলামের ফাঁক ধরে রাখে
+  // Preserve gaps between table columns
   await worker.setParameters({ preserve_interword_spaces: "1" });
   return worker;
 }
@@ -611,37 +611,37 @@ btnPdf.addEventListener("click", async () => {
     setBusy(true);
     const format = document.querySelector("#format").value;
     const langs = document.querySelector("#langs").value;
-    statusEl.textContent = "PDF প্রসেসিং...";
+    statusEl.textContent = "Processing PDF...";
     progressBox.style.display = "none";
 
-    // content:// URI থেকে পড়ে cache-এ কপি
-    log("PDF কপি করা হচ্ছে...");
+    // Read from content:// URI and copy to cache
+    log("Copying PDF...");
     const pdfBytes = await readFile(selected);
     const cacheDir = await appCacheDir();
     localPdfPath = await join(cacheDir, "input.pdf");
     await fsWriteFile(localPdfPath, pdfBytes);
 
-    log("PDF পেজ সংখ্যা বের করা হচ্ছে...");
+    log("Counting PDF pages...");
     const pageCount = await invoke("get_pdf_page_count", { pdfPath: localPdfPath });
-    log(`মোট ${pageCount} পেজ পাওয়া গেছে।`);
+    log(`Found ${pageCount} pages.`);
 
-    // আউটপুট ফোল্ডার: pdfname_image (ছবি) ও pdfname_text (টেক্সট)
+    // Output folders: pdfname_image (images) and pdfname_text (text)
     const stamp = new Date().toISOString().replace(/[-:T]/g, "").slice(0, 14);
     const pdfBase = baseNameOf(selected, `pdf_${stamp}`);
     const imageDir = `${pdfBase}_image`;
     const textDir = `${pdfBase}_text`;
-    log(`ফোল্ডার: ${imageDir}, ${textDir}`);
+    log(`Folders: ${imageDir}, ${textDir}`);
 
-    const ctx = { kind: "পেজ", index: 0, total: pageCount, base: 0.1 };
-    setProgress("পেজ", 0, pageCount, 0, "OCR ইঞ্জিন লোড হচ্ছে...");
+    const ctx = { kind: "Page", index: 0, total: pageCount, base: 0.1 };
+    setProgress("Page", 0, pageCount, 0, "Loading OCR engine...");
     worker = await makeWorker(langs, ctx);
 
-    // প্রতিটি পেজ: রেন্ডার → ছবি সেভ → OCR → টেক্সট সেভ
+    // Each page: render → save image → OCR → save text
     for (let i = 0; i < pageCount; i++) {
       ctx.index = i;
 
-      setProgress("পেজ", i, pageCount, 0, "রেন্ডার হচ্ছে (৩০০ DPI)...");
-      // Rust দুটো ফাইল cache-এ লেখে: fullPath (৫০০ DPI), ocrPath (৩০০ DPI)
+      setProgress("Page", i, pageCount, 0, "Rendering (300 DPI)...");
+      // Rust writes two files to cache: fullPath (500 DPI), ocrPath (300 DPI)
       const res = await invoke("render_pdf_page", {
         pdfPath: localPdfPath,
         pageIndex: i,
@@ -649,28 +649,28 @@ btnPdf.addEventListener("click", async () => {
       });
 
       const imgPath = `${imageDir}/${i + 1}.png`;
-      setProgress("পেজ", i, pageCount, 0.05, "ছবি সেভ হচ্ছে...");
+      setProgress("Page", i, pageCount, 0.05, "Saving image...");
       let fullBytes = await readFile(res.fullPath);
       await writeFile(folder.id, imgPath, fullBytes, { mimeType: "image/png", recursive: true });
       fullBytes = null;
-      log(`✔ ছবি ${i + 1}/${pageCount} সেভ: ${imgPath}`);
+      log(`✔ Image ${i + 1}/${pageCount} saved: ${imgPath}`);
 
-      // OCR (৩০০ DPI কপি; logger % আপডেট করবে)
+      // OCR (300 DPI copy; logger updates %)
       let ocrBytes = await readFile(res.ocrPath);
       const { data: { text } } = await worker.recognize(new Blob([ocrBytes], { type: "image/png" }));
       ocrBytes = null;
 
-      // অস্থায়ী ফাইল মুছি
+      // Delete temp files
       try { await remove(res.fullPath); } catch (_) {}
       try { await remove(res.ocrPath); } catch (_) {}
 
       const txtPath = await saveOutput(folder.id, `${textDir}/${i + 1}`, text, format, imgPath);
-      log(`✔ টেক্সট ${i + 1}/${pageCount} সেভ: ${txtPath}`);
+      log(`✔ Text ${i + 1}/${pageCount} saved: ${txtPath}`);
 
-      setProgress("পেজ", i + 1, pageCount, 0, `${i + 1} পেজ সম্পন্ন`);
+      setProgress("Page", i + 1, pageCount, 0, `${i + 1} page(s) done`);
     }
-    finishProgress("পেজ", pageCount);
-    log("🎉 সম্পন্ন!");
+    finishProgress("Page", pageCount);
+    log("🎉 Done!");
     showInterstitialIfDue();
   } catch (err) {
     log(`❌ ${err}`);
@@ -682,20 +682,20 @@ btnPdf.addEventListener("click", async () => {
   }
 });
 
-// ================= ছবি =================
-// ================= ছবি → ছবি (ফরম্যাট বদল) =================
-// WebView-এর canvas দিয়ে PNG/JPG/WebP; BMP, TIFF, ICO, PDF নিজস্ব এনকোডার দিয়ে।
-// (GIF ও AVIF নেই: Android WebView-এর canvas এগুলো তৈরি করতে পারে না।)
+// ================= Image =================
+// ================= Image → Image (format conversion) =================
+// PNG/JPG/WebP via the WebView canvas; BMP, TIFF, ICO, PDF via custom encoders.
+// (No GIF or AVIF: the Android WebView canvas cannot encode them.)
 const IMG_FORMATS = {
-  png:  { label: "PNG (সেরা মান, স্বচ্ছতা থাকে)", ext: "png",  mime: "image/png",  quality: false },
-  jpg:  { label: "JPG (ছোট ফাইল, স্বচ্ছতা সাদা হয়)", ext: "jpg", mime: "image/jpeg", quality: true },
-  webp: { label: "WebP (ছোট ফাইল, স্বচ্ছতা থাকে)", ext: "webp", mime: "image/webp", quality: true },
-  bmp:  { label: "BMP (অসংকুচিত)", ext: "bmp", mime: "image/bmp", quality: false },
-  ico:  { label: "ICO (আইকন, ২৫৬×২৫৬)", ext: "ico", mime: "image/x-icon", quality: false },
-  tiff: { label: "TIFF (অসংকুচিত, বড় ফাইল)", ext: "tiff", mime: "image/tiff", quality: false },
-  pdf:  { label: "PDF (A4 পেজে ছবি)", ext: "pdf", mime: "application/pdf", quality: true },
+  png:  { label: "PNG (best quality, keeps transparency)", ext: "png",  mime: "image/png",  quality: false },
+  jpg:  { label: "JPG (small file, transparency becomes white)", ext: "jpg", mime: "image/jpeg", quality: true },
+  webp: { label: "WebP (small file, keeps transparency)", ext: "webp", mime: "image/webp", quality: true },
+  bmp:  { label: "BMP (uncompressed)", ext: "bmp", mime: "image/bmp", quality: false },
+  ico:  { label: "ICO (icon, 256×256)", ext: "ico", mime: "image/x-icon", quality: false },
+  tiff: { label: "TIFF (uncompressed, large file)", ext: "tiff", mime: "image/tiff", quality: false },
+  pdf:  { label: "PDF (image on A4 page)", ext: "pdf", mime: "application/pdf", quality: true },
 };
-const MAX_CONVERT_PIXELS = 40_000_000; // ৪০ মেগাপিক্সেলের বেশি হলে মেমরি ঝুঁকি
+const MAX_CONVERT_PIXELS = 40_000_000; // Memory risk above 40 megapixels
 
 function makeCanvas(w, h) {
   const c = document.createElement("canvas");
@@ -705,18 +705,18 @@ function makeCanvas(w, h) {
 }
 function canvasBlob(canvas, type, quality) {
   return new Promise((resolve, reject) =>
-    canvas.toBlob((b) => (b ? resolve(b) : reject(new Error("ছবি এনকোড করা যায়নি"))), type, quality)
+    canvas.toBlob((b) => (b ? resolve(b) : reject(new Error("Could not encode image"))), type, quality)
   );
 }
 const blobBytes = async (b) => new Uint8Array(await b.arrayBuffer());
 
-// bytes → ছবির উৎস (ImageBitmap বা <img>)
+// bytes → image source (ImageBitmap or <img>)
 async function decodeImage(bytes) {
   const blob = new Blob([bytes]);
   try {
     return await createImageBitmap(blob);
   } catch (_) {
-    // পুরনো WebView: <img> দিয়ে চেষ্টা
+    // Older WebView: try via <img>
     const url = URL.createObjectURL(blob);
     try {
       const img = new Image();
@@ -724,7 +724,7 @@ async function decodeImage(bytes) {
       await img.decode();
       return img;
     } catch (e) {
-      throw new Error("এই ছবির ফরম্যাট পড়া যায়নি (HEIC/TIFF ইত্যাদি সমর্থিত নয়)");
+      throw new Error("Cannot read this image format (HEIC/TIFF etc. not supported)");
     } finally {
       URL.revokeObjectURL(url);
     }
@@ -732,7 +732,7 @@ async function decodeImage(bytes) {
 }
 const srcSize = (s) => ({ w: s.naturalWidth || s.width, h: s.naturalHeight || s.height });
 
-// ---------- BMP (২৪-বিট, নিচ থেকে উপরে) ----------
+// ---------- BMP (24-bit, bottom-up) ----------
 function encodeBmp(canvas) {
   const w = canvas.width, h = canvas.height;
   const px = canvas.getContext("2d").getImageData(0, 0, w, h).data;
@@ -763,7 +763,7 @@ function encodeBmp(canvas) {
   return out;
 }
 
-// ---------- TIFF (অসংকুচিত RGB, ৮-বিট) ----------
+// ---------- TIFF (uncompressed RGB, 8-bit) ----------
 function encodeTiff(canvas) {
   const w = canvas.width, h = canvas.height;
   const px = canvas.getContext("2d").getImageData(0, 0, w, h).data;
@@ -792,7 +792,7 @@ function encodeTiff(canvas) {
     if (type === SHORT && count === 1) dv.setUint16(o + 8, value, true);
     else dv.setUint32(o + 8, value, true);
   });
-  dv.setUint32(ifdOff + 2 + n * 12, 0, true); // পরের IFD নেই
+  dv.setUint32(ifdOff + 2 + n * 12, 0, true); // no next IFD
   dv.setUint16(bpsOff, 8, true); dv.setUint16(bpsOff + 2, 8, true); dv.setUint16(bpsOff + 4, 8, true);
   let o = dataOff;
   for (let s = 0; s < px.length; s += 4) {
@@ -801,13 +801,13 @@ function encodeTiff(canvas) {
   return out;
 }
 
-// ---------- ICO (ভেতরে PNG, একটি ২৫৬×২৫৬ এন্ট্রি) ----------
+// ---------- ICO (embedded PNG, single 256×256 entry) ----------
 function encodeIco(pngBytes) {
   const out = new Uint8Array(22 + pngBytes.length);
   const dv = new DataView(out.buffer);
   dv.setUint16(2, 1, true);   // type = icon
-  dv.setUint16(4, 1, true);   // ১টি ছবি
-  out[6] = 0; out[7] = 0;     // ০ মানে ২৫৬
+  dv.setUint16(4, 1, true);   // 1 image
+  out[6] = 0; out[7] = 0;     // 0 means 256
   dv.setUint16(10, 1, true);  // planes
   dv.setUint16(12, 32, true); // bits
   dv.setUint32(14, pngBytes.length, true);
@@ -816,7 +816,7 @@ function encodeIco(pngBytes) {
   return out;
 }
 
-// ---------- PDF (A4 পেজে ছবি, ভেতরে JPEG) ----------
+// ---------- PDF (image on A4 page, embedded JPEG) ----------
 function encodePdfFromJpeg(jpeg, wpx, hpx) {
   const te = new TextEncoder();
   let pw = 595.28, ph = 841.89;
@@ -857,18 +857,18 @@ function encodePdfFromJpeg(jpeg, wpx, hpx) {
   return out;
 }
 
-// মূল রূপান্তর: bytes → নতুন ফরম্যাটের bytes
+// Main conversion: bytes → bytes in the target format
 async function convertImage(bytes, target, quality) {
   const f = IMG_FORMATS[target];
-  if (!f) throw new Error("অজানা ফরম্যাট");
+  if (!f) throw new Error("Unknown format");
   const src = await decodeImage(bytes);
   try {
     const { w, h } = srcSize(src);
-    if (!w || !h) throw new Error("ছবির মাপ পাওয়া যায়নি");
-    if (w * h > MAX_CONVERT_PIXELS) throw new Error(`ছবি খুব বড় (${w}×${h})`);
+    if (!w || !h) throw new Error("Could not get image dimensions");
+    if (w * h > MAX_CONVERT_PIXELS) throw new Error(`Image too large (${w}×${h})`);
 
     if (target === "ico") {
-      const c = makeCanvas(256, 256); // স্বচ্ছ, ছবি মাঝখানে
+      const c = makeCanvas(256, 256); // transparent, image centered
       const s = Math.min(256 / w, 256 / h);
       const dw = Math.round(w * s), dh = Math.round(h * s);
       c.getContext("2d").drawImage(src, (256 - dw) / 2, (256 - dh) / 2, dw, dh);
@@ -877,7 +877,7 @@ async function convertImage(bytes, target, quality) {
 
     const canvas = makeCanvas(w, h);
     const ctx = canvas.getContext("2d");
-    // JPG/BMP/TIFF/PDF-এ স্বচ্ছতা নেই; সাদা পটভূমি না দিলে কালো হয়ে যায়
+    // JPG/BMP/TIFF/PDF have no transparency; without a white background it becomes black
     if (!["png", "webp"].includes(target)) {
       ctx.fillStyle = "#ffffff";
       ctx.fillRect(0, 0, w, h);
@@ -888,7 +888,7 @@ async function convertImage(bytes, target, quality) {
     if (target === "jpg") return blobBytes(await canvasBlob(canvas, "image/jpeg", quality));
     if (target === "webp") {
       const b = await canvasBlob(canvas, "image/webp", quality);
-      if (b.type !== "image/webp") throw new Error("এই ডিভাইসে WebP তৈরি হয় না");
+      if (b.type !== "image/webp") throw new Error("WebP is not supported on this device");
       return blobBytes(b);
     }
     if (target === "bmp") return encodeBmp(canvas);
@@ -897,13 +897,13 @@ async function convertImage(bytes, target, quality) {
       const jpeg = await blobBytes(await canvasBlob(canvas, "image/jpeg", quality));
       return encodePdfFromJpeg(jpeg, w, h);
     }
-    throw new Error("অজানা ফরম্যাট");
+    throw new Error("Unknown format");
   } finally {
     if (src && typeof src.close === "function") src.close();
   }
 }
 
-// ---- ছবি বোতামের মোড ও রূপান্তরের সেটিংস ----
+// ---- Image button mode and conversion settings ----
 const imgModeEl = document.querySelector("#img-mode");
 const imgTargetEl = document.querySelector("#img-target");
 const imgQualityEl = document.querySelector("#img-quality");
@@ -930,7 +930,7 @@ function applyImgMode() {
   const convert = imgModeEl.value === "convert";
   document.querySelector("#convert-opts").style.display = convert ? "flex" : "none";
   document.querySelector("#quality-wrap").style.display = IMG_FORMATS[imgTargetEl.value].quality ? "block" : "none";
-  btnImg.textContent = convert ? "ছবি → ছবি" : "ছবি → টেক্সট";
+  btnImg.textContent = convert ? "Image → Image" : "Image → Text";
   try {
     localStorage.setItem("aqis_img_mode", imgModeEl.value);
     localStorage.setItem("aqis_img_target", imgTargetEl.value);
@@ -940,7 +940,7 @@ function applyImgMode() {
 for (const el of [imgModeEl, imgTargetEl, imgQualityEl]) el.addEventListener("change", applyImgMode);
 applyImgMode();
 
-// ছবি → ছবি: একটার পর একটা রূপান্তর, প্রতিটির ফল সাথে সাথে সেভ
+// Image → Image: convert one by one, saving each result immediately
 async function convertImages() {
   try {
     const selected = await open({
@@ -956,7 +956,7 @@ async function convertImages() {
     const target = imgTargetEl.value;
     const f = IMG_FORMATS[target];
     const quality = parseFloat(imgQualityEl.value) || 0.92;
-    statusEl.textContent = `ছবি রূপান্তর শুরু (${f.ext.toUpperCase()})...`;
+    statusEl.textContent = `Starting image conversion (${f.ext.toUpperCase()})...`;
     progressBox.style.display = "none";
 
     const total = selected.length;
@@ -965,24 +965,24 @@ async function convertImages() {
       const imgPath = selected[i];
       const outName = `${baseNameOf(imgPath, `image_${i + 1}`)}.${f.ext}`;
       try {
-        setProgress("ছবি", i, total, 0, "ছবি পড়া হচ্ছে...");
+        setProgress("Image", i, total, 0, "Reading image...");
         const bytes = await readFile(imgPath);
 
-        setProgress("ছবি", i, total, 0.3, "রূপান্তর হচ্ছে...");
+        setProgress("Image", i, total, 0.3, "Converting...");
         const out = await convertImage(bytes, target, quality);
 
-        setProgress("ছবি", i, total, 0.8, "সেভ হচ্ছে...");
+        setProgress("Image", i, total, 0.8, "Saving...");
         await writeFile(folder.id, outName, out, { mimeType: f.mime });
-        log(`✔ ${i + 1}/${total} সেভ: ${outName}`);
+        log(`✔ ${i + 1}/${total} saved: ${outName}`);
         ok++;
       } catch (err) {
-        // একটি ছবি ব্যর্থ হলে বাকিগুলো চলবে
+        // If one image fails, the rest continue
         log(`❌ ${i + 1}/${total} ${displayName(imgPath)}: ${err}`);
       }
-      setProgress("ছবি", i + 1, total, 0, `${i + 1} ছবি সম্পন্ন`);
+      setProgress("Image", i + 1, total, 0, `${i + 1} image(s) done`);
     }
-    finishProgress("ছবি", total);
-    log(`🎉 সম্পন্ন! ${ok}/${total} ছবি রূপান্তর হয়েছে।`);
+    finishProgress("Image", total);
+    log(`🎉 Done! ${ok}/${total} images converted.`);
     if (ok > 0) showInterstitialIfDue();
   } catch (err) {
     log(`❌ ${err}`);
@@ -1008,12 +1008,12 @@ btnImg.addEventListener("click", async () => {
     setBusy(true);
     const format = document.querySelector("#format").value;
     const langs = document.querySelector("#langs").value;
-    statusEl.textContent = "OCR শুরু...";
+    statusEl.textContent = "Starting OCR...";
     progressBox.style.display = "none";
 
     const total = selected.length;
-    const ctx = { kind: "ছবি", index: 0, total, base: 0.1 };
-    setProgress("ছবি", 0, total, 0, "OCR ইঞ্জিন লোড হচ্ছে...");
+    const ctx = { kind: "Image", index: 0, total, base: 0.1 };
+    setProgress("Image", 0, total, 0, "Loading OCR engine...");
     worker = await makeWorker(langs, ctx);
 
     for (let i = 0; i < total; i++) {
@@ -1021,18 +1021,18 @@ btnImg.addEventListener("click", async () => {
       const imgPath = selected[i];
       const outBase = baseNameOf(imgPath, `image_${i + 1}`);
 
-      setProgress("ছবি", i, total, 0, "ছবি পড়া হচ্ছে...");
+      setProgress("Image", i, total, 0, "Reading image...");
       const bytes = await readFile(imgPath);
 
       const { data: { text } } = await worker.recognize(new Blob([bytes]));
 
       const fileName = await saveOutput(folder.id, outBase, text, format, imgPath);
-      log(`✔ ${i + 1}/${total} সেভ: ${fileName}`);
+      log(`✔ ${i + 1}/${total} saved: ${fileName}`);
 
-      setProgress("ছবি", i + 1, total, 0, `${i + 1} ছবি সম্পন্ন`);
+      setProgress("Image", i + 1, total, 0, `${i + 1} image(s) done`);
     }
-    finishProgress("ছবি", total);
-    log("🎉 সম্পন্ন!");
+    finishProgress("Image", total);
+    log("🎉 Done!");
     showInterstitialIfDue();
   } catch (err) {
     log(`❌ ${err}`);
@@ -1043,29 +1043,29 @@ btnImg.addEventListener("click", async () => {
   }
 });
 
-// ================= বিজ্ঞাপন (AdMob) =================
-// ⚠️ নিচের আইডিগুলো Google-এর টেস্ট আইডি। প্রকাশের আগে নিজের AdMob আইডি বসান।
-// টেস্ট আইডি ছাড়া নিজের বিজ্ঞাপনে নিজে ক্লিক করবেন না — অ্যাকাউন্ট বন্ধ হতে পারে।
+// ================= Ads (AdMob) =================
+// ⚠️ The IDs below are Google test IDs. Replace with your own AdMob IDs before publishing.
+// Never click your own ads outside test IDs — your account may be suspended.
 const ADS = {
   enabled: true,
-  bannerId: "ca-app-pub-3940256099942544/9214589741", // টেস্ট: অ্যাডাপ্টিভ ব্যানার
-  // টেস্ট: ব্যানার-আইডি দিয়ে ৩০০×২৫০ চলে। আসল প্রকাশে AdMob-এ আলাদা "Banner" Ad Unit বানিয়ে বসান।
+  bannerId: "ca-app-pub-3940256099942544/9214589741", // Test: adaptive banner
+  // Test: the banner ID serves 300×250. For a real release, create a separate "Banner" ad unit in AdMob.
   mrecId: "ca-app-pub-3940256099942544/6300978111",
-  interstitialId: "ca-app-pub-3940256099942544/1033173712", // টেস্ট: ইন্টারস্টিশিয়াল
-  interstitialMinGapMs: 3 * 60 * 1000, // দুই ফুলস্ক্রিন বিজ্ঞাপনের মাঝে ন্যূনতম ৩ মিনিট
+  interstitialId: "ca-app-pub-3940256099942544/1033173712", // Test: interstitial
+  interstitialMinGapMs: 3 * 60 * 1000, // minimum 3 minutes between two fullscreen ads
 };
 let lastInterstitialAt = 0;
 
 const adsCall = (cmd, payload = {}) => invoke("ads_call", { cmd, payload });
 
 let adsReady = false;
-let adsChain = Promise.resolve(); // বিজ্ঞাপনের কল একটার পর একটা চলার জন্য
+let adsChain = Promise.resolve(); // so ad calls run one after another
 const queueAds = (fn) => {
   adsChain = adsChain.then(fn).catch((e) => console.warn("Ads:", e));
   return adsChain;
 };
 
-// কাজ শুরু: নিচের ব্যানার সরিয়ে উপরে ৩০০×২৫০ বিজ্ঞাপন
+// Work start: remove the bottom banner and show a 300×250 ad on top
 function enterWorkAds() {
   if (!ADS.enabled || !adsReady) return;
   queueAds(async () => {
@@ -1078,7 +1078,7 @@ function enterWorkAds() {
   });
 }
 
-// কাজ শেষ: উপরের বিজ্ঞাপন সরিয়ে নিচে ব্যানার ফেরত
+// Work end: remove the top ad and restore the bottom banner
 function leaveWorkAds() {
   if (!ADS.enabled || !adsReady) return;
   queueAds(async () => {
@@ -1094,7 +1094,7 @@ function addPrivacyLink() {
   if (document.querySelector("#ads-privacy")) return;
   const b = document.createElement("button");
   b.id = "ads-privacy";
-  b.textContent = "বিজ্ঞাপন গোপনীয়তা সেটিংস";
+  b.textContent = "Ad privacy settings";
   b.style.cssText =
     "display:block; margin:12px auto 0; background:none; border:none; color:#64748b; font-size:.8rem; text-decoration:underline;";
   b.addEventListener("click", () => adsCall("privacyOptions").catch(() => {}));
@@ -1109,7 +1109,7 @@ async function initAds() {
     adsReady = true;
 
     const b = await adsCall("showBanner", { unitId: ADS.bannerId });
-    // ব্যানার যাতে কনটেন্ট ঢেকে না দেয়
+    // so the banner doesn't cover content
     if (b && b.height) document.body.style.paddingBottom = `${Math.ceil(b.height) + 8}px`;
 
     await adsCall("loadInterstitial", { unitId: ADS.interstitialId });
@@ -1119,7 +1119,7 @@ async function initAds() {
   }
 }
 
-// কাজ সম্পন্ন হলে (স্বাভাবিক বিরতিতে) ফুলস্ক্রিন বিজ্ঞাপন, ফ্রিকোয়েন্সি সীমা মেনে
+// Show a fullscreen ad after work completes (with normal pacing), respecting the frequency cap
 async function showInterstitialIfDue() {
   if (!ADS.enabled) return;
   if (Date.now() - lastInterstitialAt < ADS.interstitialMinGapMs) return;
@@ -1131,9 +1131,9 @@ async function showInterstitialIfDue() {
   }
 }
 
-// ================= আপডেট চেক =================
-// Hugging Face-এর JSON ফাইল: { "app_version": "v1.0.1", "update_notes": "...", "apk_url": "https://..." }
-// ঐচ্ছিক: "force": true দিলে "পরে" বাটন থাকবে না।
+// ================= Update check =================
+// Hugging Face JSON file: { "app_version": "v1.0.1", "update_notes": "...", "apk_url": "https://..." }
+// Optional: with "force": true the "Later" button is hidden.
 const UPDATE_JSON_URL = "https://huggingface.co/datasets/ahashanahmed/tafsir/resolve/main/pdfconverter";
 const FALLBACK_VERSION = "1.0.0";
 
@@ -1169,11 +1169,11 @@ function showUpdateModal(info, currentVer) {
     "background:#fff; border-radius:16px; padding:20px; width:100%; max-width:380px; box-shadow:0 10px 40px rgba(0,0,0,.3);";
 
   const title = document.createElement("div");
-  title.textContent = "🔔 নতুন আপডেট এসেছে";
+  title.textContent = "🔔 New update available";
   title.style.cssText = "font-size:1.15rem; font-weight:700; margin-bottom:6px;";
 
   const ver = document.createElement("div");
-  ver.textContent = `বর্তমান: v${String(currentVer).replace(/^v/i, "")}  →  নতুন: v${String(info.app_version).replace(/^v/i, "")}`;
+  ver.textContent = `Current: v${String(currentVer).replace(/^v/i, "")}  →  New: v${String(info.app_version).replace(/^v/i, "")}`;
   ver.style.cssText = "font-size:.85rem; color:#64748b; margin-bottom:12px;";
 
   const notes = document.createElement("div");
@@ -1181,7 +1181,7 @@ function showUpdateModal(info, currentVer) {
   notes.style.cssText =
     "font-size:.95rem; margin-bottom:16px; white-space:pre-wrap; max-height:160px; overflow-y:auto;";
 
-  // ডাউনলোড প্রগ্রেস
+  // Download progress
   const progWrap = document.createElement("div");
   progWrap.style.cssText = "display:none; margin-bottom:12px;";
   const progTop = document.createElement("div");
@@ -1208,13 +1208,13 @@ function showUpdateModal(info, currentVer) {
   row.style.cssText = "display:flex; gap:10px;";
 
   const btnUpdate = document.createElement("button");
-  btnUpdate.textContent = "আপডেট করুন";
+  btnUpdate.textContent = "Update";
   btnUpdate.style.cssText =
     "flex:1; padding:12px; background:#2563eb; color:#fff; border:none; border-radius:8px; font-weight:600;";
   row.appendChild(btnUpdate);
 
   const btnBrowser = document.createElement("button");
-  btnBrowser.textContent = "ব্রাউজারে ডাউনলোড";
+  btnBrowser.textContent = "Download in browser";
   btnBrowser.style.cssText =
     "display:none; padding:12px; background:#e2e8f0; color:#0f172a; border:none; border-radius:8px; font-weight:600; font-size:.8rem;";
   btnBrowser.addEventListener("click", async () => {
@@ -1224,41 +1224,41 @@ function showUpdateModal(info, currentVer) {
 
   if (!info.force) {
     const btnLater = document.createElement("button");
-    btnLater.textContent = "পরে";
+    btnLater.textContent = "Later";
     btnLater.style.cssText =
       "padding:12px 18px; background:#e2e8f0; color:#0f172a; border:none; border-radius:8px; font-weight:600;";
     btnLater.addEventListener("click", () => overlay.remove());
     row.appendChild(btnLater);
   }
 
-  let downloaded = false; // ডাউনলোড শেষ হলে true
+  let downloaded = false; // true once the download finishes
 
   async function doInstall() {
     const r = await invoke("update_install");
     if (r && r.needsPermission) {
-      setMsg("সেটিংসে “এই উৎস থেকে অনুমতি দিন” চালু করে অ্যাপে ফিরে এসে আবার “ইনস্টল করুন” চাপুন।", false);
+      setMsg("Enable “Allow from this source” in Settings, come back to the app, and tap “Install” again.", false);
       btnUpdate.disabled = false;
-      btnUpdate.textContent = "ইনস্টল করুন";
+      btnUpdate.textContent = "Install";
       return;
     }
-    setMsg("ইনস্টলার খোলা হয়েছে। “ইনস্টল/আপডেট” চাপুন।", false);
+    setMsg("Installer opened. Tap “Install/Update”.", false);
     btnUpdate.disabled = false;
-    btnUpdate.textContent = "আবার ইনস্টল করুন";
+    btnUpdate.textContent = "Install again";
   }
 
   async function doDownload() {
-    if (!/^https:\/\//i.test(info.apk_url)) throw new Error("অবৈধ APK লিংক");
+    if (!/^https:\/\//i.test(info.apk_url)) throw new Error("Invalid APK link");
     progWrap.style.display = "block";
-    progLabel.textContent = "ডাউনলোড হচ্ছে...";
+    progLabel.textContent = "Downloading...";
     progPct.textContent = "0%";
     fill.style.width = "0%";
 
     await invoke("update_download", { url: info.apk_url });
 
-    // প্রগ্রেস পোলিং
+    // Progress polling
     while (true) {
       const p = await invoke("update_progress");
-      if (p.state === "error") throw new Error(p.error || "ডাউনলোড ব্যর্থ");
+      if (p.state === "error") throw new Error(p.error || "Download failed");
       if (p.total > 0) {
         const pct = Math.min(100, Math.round((p.downloaded / p.total) * 100));
         fill.style.width = `${pct}%`;
@@ -1273,7 +1273,7 @@ function showUpdateModal(info, currentVer) {
     }
     fill.style.width = "100%";
     progPct.textContent = "100%";
-    progLabel.textContent = "ডাউনলোড সম্পন্ন";
+    progLabel.textContent = "Download complete";
     downloaded = true;
   }
 
@@ -1283,16 +1283,16 @@ function showUpdateModal(info, currentVer) {
     msg.style.display = "none";
     try {
       if (!downloaded) {
-        btnUpdate.textContent = "ডাউনলোড হচ্ছে...";
+        btnUpdate.textContent = "Downloading...";
         await doDownload();
       }
-      btnUpdate.textContent = "ইনস্টল হচ্ছে...";
+      btnUpdate.textContent = "Installing...";
       await doInstall();
     } catch (err) {
       setMsg(`❌ ${err}`, true);
       btnUpdate.disabled = false;
-      btnUpdate.textContent = downloaded ? "আবার চেষ্টা করুন" : "আবার ডাউনলোড";
-      btnBrowser.style.display = "block"; // ব্যর্থ হলে ব্রাউজার বিকল্প
+      btnUpdate.textContent = downloaded ? "Try again" : "Download again";
+      btnBrowser.style.display = "block"; // Browser fallback on failure
     }
   });
 
@@ -1313,7 +1313,7 @@ async function checkForUpdate() {
 
     if (isNewer(info.app_version, current)) showUpdateModal(info, current);
   } catch (err) {
-    // নেটওয়ার্ক না থাকলে চুপচাপ বাদ দিই
+    // Silently skip when offline
     console.warn("Update check failed:", err);
   }
 }
