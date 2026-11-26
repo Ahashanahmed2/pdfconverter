@@ -12,6 +12,9 @@ const DPI: f32 = 300.0;
 const MAX_SIDE_PX: f32 = 12000.0;
 
 // ============ Android Kotlin প্লাগইনের সেতু (আপডেটার + বিজ্ঞাপন) ============
+// গুরুত্বপূর্ণ: Tauri প্লাগইন Rust-এর নাম দিয়ে রেজিস্টার হয়, Kotlin ক্লাসের নাম দিয়ে নয়।
+// দুই ক্লাস একই নামের প্লাগইনে রাখলে পরেরটা আগেরটাকে ঢেকে দেয়
+// ("No command download found for plugin ...AdsPlugin")। তাই দুটো আলাদা প্লাগইন।
 #[cfg(target_os = "android")]
 mod updater {
     use serde_json::{json, Value};
@@ -21,11 +24,21 @@ mod updater {
     pub struct UpdaterHandle(pub PluginHandle<Wry>);
     pub struct AdsHandle(pub PluginHandle<Wry>);
 
+    // প্লাগইন ১: "apkupdater" → শুধু UpdaterPlugin
     pub fn plugin() -> TauriPlugin<Wry> {
         Builder::<Wry>::new("apkupdater")
             .setup(|app, api| {
                 let updater = api.register_android_plugin("com.aqis.ocr", "UpdaterPlugin")?;
                 app.manage(UpdaterHandle(updater));
+                Ok(())
+            })
+            .build()
+    }
+
+    // প্লাগইন ২: "adsplugin" → শুধু AdsPlugin
+    pub fn ads_plugin() -> TauriPlugin<Wry> {
+        Builder::<Wry>::new("adsplugin")
+            .setup(|app, api| {
                 let ads = api.register_android_plugin("com.aqis.ocr", "AdsPlugin")?;
                 app.manage(AdsHandle(ads));
                 Ok(())
@@ -95,6 +108,10 @@ mod updater {
 
     pub fn plugin() -> TauriPlugin<Wry> {
         Builder::<Wry>::new("apkupdater").build()
+    }
+
+    pub fn ads_plugin() -> TauriPlugin<Wry> {
+        Builder::<Wry>::new("adsplugin").build()
     }
 
     #[tauri::command]
@@ -204,6 +221,7 @@ pub fn run() {
         .plugin(tauri_plugin_fs::init())
         .plugin(tauri_plugin_opener::init())
         .plugin(updater::plugin())
+        .plugin(updater::ads_plugin())
         .invoke_handler(tauri::generate_handler![
             get_pdf_page_count,
             render_pdf_page,
