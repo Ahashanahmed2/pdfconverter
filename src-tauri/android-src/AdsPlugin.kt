@@ -28,9 +28,6 @@ import com.google.android.ump.ConsentForm
 import com.google.android.ump.ConsentInformation
 import com.google.android.ump.ConsentRequestParameters
 import com.google.android.ump.UserMessagingPlatform
-import kotlinx.coroutines.Dispatchers
-import kotlinx.coroutines.GlobalScope
-import kotlinx.coroutines.launch
 import java.io.File
 import java.io.FileOutputStream
 import java.net.HttpURLConnection
@@ -117,7 +114,7 @@ class AdsPlugin(private val activity: Activity) : Plugin(activity) {
         UserMessagingPlatform.getConsentInformation(activity).canRequestAds()
 
     // ======================================================
-    //  2. ব্যানার (নিচে লেগে থাকে)
+    //  2. ব্যানার
     // ======================================================
     @Command
     fun showBanner(invoke: Invoke) {
@@ -187,7 +184,7 @@ class AdsPlugin(private val activity: Activity) : Plugin(activity) {
     }
 
     // ======================================================
-    //  2.5 Media Rectangle (300×250) — top during work
+    //  2.5 Media Rectangle (300×250)
     // ======================================================
     private fun removeMrec() {
         mrec?.let {
@@ -248,7 +245,7 @@ class AdsPlugin(private val activity: Activity) : Plugin(activity) {
     }
 
     // ======================================================
-    //  3. Interstitial (fullscreen)
+    //  3. Interstitial
     // ======================================================
     @Command
     fun loadInterstitial(invoke: Invoke) {
@@ -323,7 +320,7 @@ class AdsPlugin(private val activity: Activity) : Plugin(activity) {
     }
 
     // ======================================================
-    //  4. Privacy options (EU/UK)
+    //  4. Privacy options
     // ======================================================
     @Command
     fun privacyOptions(invoke: Invoke) {
@@ -340,7 +337,7 @@ class AdsPlugin(private val activity: Activity) : Plugin(activity) {
     }
 
     // ======================================================
-    //  5. UPDATE: download (native HTTP, no CORS)
+    //  5. UPDATE: download (pure Thread — no coroutines dependency needed)
     // ======================================================
     @Command
     fun update_download(invoke: Invoke) {
@@ -350,7 +347,8 @@ class AdsPlugin(private val activity: Activity) : Plugin(activity) {
             return
         }
 
-        GlobalScope.launch(Dispatchers.IO) {
+        // Pure Java thread — no kotlinx.coroutines needed
+        Thread {
             try {
                 dlState = "downloading"
                 dlBytes = 0
@@ -370,7 +368,7 @@ class AdsPlugin(private val activity: Activity) : Plugin(activity) {
                     dlState = "error"
                     dlError = "HTTP $code"
                     invoke.reject("HTTP $code")
-                    return@launch
+                    return@Thread
                 }
 
                 dlTotal = conn.contentLengthLong
@@ -393,7 +391,7 @@ class AdsPlugin(private val activity: Activity) : Plugin(activity) {
                     dlState = "error"
                     dlError = "Empty file"
                     invoke.reject("Downloaded file is empty")
-                    return@launch
+                    return@Thread
                 }
 
                 dlPath = outFile.absolutePath
@@ -404,7 +402,7 @@ class AdsPlugin(private val activity: Activity) : Plugin(activity) {
                 dlError = e.message ?: "Unknown error"
                 invoke.reject(e.message ?: "Download failed")
             }
-        }
+        }.start()
     }
 
     // ======================================================
