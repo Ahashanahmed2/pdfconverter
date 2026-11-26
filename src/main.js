@@ -26,7 +26,7 @@ const app = document.querySelector("#app");
 app.innerHTML = `
   <div style="max-width: 600px; margin: 0 auto; padding: 20px;">
     <h1 style="font-size: 1.5rem; margin: 0 0 4px;">PDF&amp;Image Converter</h1>
-    <p style="color: #64748b; font-size: 0.9rem; margin: 0 0 16px;">PDF ও ছবি থেকে টেক্সট</p>
+    <p style="color: #64748b; font-size: 0.9rem; margin: 0 0 16px;">PDF ও ছবি থেকে টেক্সট, ছবির ফরম্যাট বদল</p>
 
     <div style="background:#fff; padding:16px; border-radius:12px; margin-bottom:16px;">
       <div style="display:flex; flex-wrap:wrap; gap:12px; margin-bottom:14px;">
@@ -39,6 +39,28 @@ app.innerHTML = `
           <label style="font-size:.85rem;font-weight:600;">ভাষা <span style="font-weight:400;color:#64748b;">(সর্বোচ্চ ৩টি)</span></label>
           <button id="lang-btn" type="button" style="display:block; width:100%; padding:10px; margin-top:4px; text-align:left; border:1px solid #767676; border-radius:4px; background:#fff; color:#0f172a; font-size:1rem; white-space:nowrap; overflow:hidden; text-overflow:ellipsis;">—</button>
           <input type="hidden" id="langs" value="eng+ben">
+        </div>
+      </div>
+      <div style="margin-bottom:14px;">
+        <label style="font-size:.85rem;font-weight:600;">ছবি বোতামে কী হবে</label>
+        <select id="img-mode" style="width:100%; padding:8px; margin-top:4px;">
+          <option value="ocr">ছবি থেকে টেক্সট (OCR)</option>
+          <option value="convert">ছবির ফরম্যাট বদল (jpg → png ইত্যাদি)</option>
+        </select>
+      </div>
+      <div id="convert-opts" style="display:none; flex-wrap:wrap; gap:12px; margin-bottom:14px;">
+        <div style="flex:1 1 100%;">
+          <label style="font-size:.85rem;font-weight:600;">নতুন ফরম্যাট</label>
+          <select id="img-target" style="width:100%; padding:8px; margin-top:4px;"></select>
+        </div>
+        <div id="quality-wrap" style="flex:1 1 100%; display:none;">
+          <label style="font-size:.85rem;font-weight:600;">মান</label>
+          <select id="img-quality" style="width:100%; padding:8px; margin-top:4px;">
+            <option value="1">সর্বোচ্চ (১০০%)</option>
+            <option value="0.92" selected>ভালো (৯২%)</option>
+            <option value="0.8">মাঝারি (৮০%)</option>
+            <option value="0.6">ছোট ফাইল (৬০%)</option>
+          </select>
         </div>
       </div>
       <div style="display:flex; gap:10px;">
@@ -83,6 +105,7 @@ function setBusy(busy) {
   btnImg.disabled = busy;
   document.querySelector("#format").disabled = busy;
   document.querySelector("#lang-btn").disabled = busy;
+  for (const id of ["#img-mode", "#img-target", "#img-quality"]) document.querySelector(id).disabled = busy;
   // কাজ চলার সময় উপরে বড় বিজ্ঞাপন, শেষে নিচে ব্যানার
   if (busy) enterWorkAds(); else leaveWorkAds();
 }
@@ -660,7 +683,317 @@ btnPdf.addEventListener("click", async () => {
 });
 
 // ================= ছবি =================
+// ================= ছবি → ছবি (ফরম্যাট বদল) =================
+// WebView-এর canvas দিয়ে PNG/JPG/WebP; BMP, TIFF, ICO, PDF নিজস্ব এনকোডার দিয়ে।
+// (GIF ও AVIF নেই: Android WebView-এর canvas এগুলো তৈরি করতে পারে না।)
+const IMG_FORMATS = {
+  png:  { label: "PNG (সেরা মান, স্বচ্ছতা থাকে)", ext: "png",  mime: "image/png",  quality: false },
+  jpg:  { label: "JPG (ছোট ফাইল, স্বচ্ছতা সাদা হয়)", ext: "jpg", mime: "image/jpeg", quality: true },
+  webp: { label: "WebP (ছোট ফাইল, স্বচ্ছতা থাকে)", ext: "webp", mime: "image/webp", quality: true },
+  bmp:  { label: "BMP (অসংকুচিত)", ext: "bmp", mime: "image/bmp", quality: false },
+  ico:  { label: "ICO (আইকন, ২৫৬×২৫৬)", ext: "ico", mime: "image/x-icon", quality: false },
+  tiff: { label: "TIFF (অসংকুচিত, বড় ফাইল)", ext: "tiff", mime: "image/tiff", quality: false },
+  pdf:  { label: "PDF (A4 পেজে ছবি)", ext: "pdf", mime: "application/pdf", quality: true },
+};
+const MAX_CONVERT_PIXELS = 40_000_000; // ৪০ মেগাপিক্সেলের বেশি হলে মেমরি ঝুঁকি
+
+function makeCanvas(w, h) {
+  const c = document.createElement("canvas");
+  c.width = w;
+  c.height = h;
+  return c;
+}
+function canvasBlob(canvas, type, quality) {
+  return new Promise((resolve, reject) =>
+    canvas.toBlob((b) => (b ? resolve(b) : reject(new Error("ছবি এনকোড করা যায়নি"))), type, quality)
+  );
+}
+const blobBytes = async (b) => new Uint8Array(await b.arrayBuffer());
+
+// bytes → ছবির উৎস (ImageBitmap বা <img>)
+async function decodeImage(bytes) {
+  const blob = new Blob([bytes]);
+  try {
+    return await createImageBitmap(blob);
+  } catch (_) {
+    // পুরনো WebView: <img> দিয়ে চেষ্টা
+    const url = URL.createObjectURL(blob);
+    try {
+      const img = new Image();
+      img.src = url;
+      await img.decode();
+      return img;
+    } catch (e) {
+      throw new Error("এই ছবির ফরম্যাট পড়া যায়নি (HEIC/TIFF ইত্যাদি সমর্থিত নয়)");
+    } finally {
+      URL.revokeObjectURL(url);
+    }
+  }
+}
+const srcSize = (s) => ({ w: s.naturalWidth || s.width, h: s.naturalHeight || s.height });
+
+// ---------- BMP (২৪-বিট, নিচ থেকে উপরে) ----------
+function encodeBmp(canvas) {
+  const w = canvas.width, h = canvas.height;
+  const px = canvas.getContext("2d").getImageData(0, 0, w, h).data;
+  const row = (w * 3 + 3) & ~3;
+  const size = 54 + row * h;
+  const out = new Uint8Array(size);
+  const dv = new DataView(out.buffer);
+  out[0] = 0x42; out[1] = 0x4d;
+  dv.setUint32(2, size, true);
+  dv.setUint32(10, 54, true);
+  dv.setUint32(14, 40, true);
+  dv.setInt32(18, w, true);
+  dv.setInt32(22, h, true);
+  dv.setUint16(26, 1, true);
+  dv.setUint16(28, 24, true);
+  dv.setUint32(34, row * h, true);
+  dv.setInt32(38, 2835, true);
+  dv.setInt32(42, 2835, true);
+  for (let y = 0; y < h; y++) {
+    let s = (h - 1 - y) * w * 4;
+    let o = 54 + y * row;
+    for (let x = 0; x < w; x++, s += 4) {
+      out[o++] = px[s + 2];
+      out[o++] = px[s + 1];
+      out[o++] = px[s];
+    }
+  }
+  return out;
+}
+
+// ---------- TIFF (অসংকুচিত RGB, ৮-বিট) ----------
+function encodeTiff(canvas) {
+  const w = canvas.width, h = canvas.height;
+  const px = canvas.getContext("2d").getImageData(0, 0, w, h).data;
+  const n = 10;
+  const ifdOff = 8;
+  const ifdSize = 2 + n * 12 + 4;
+  const bpsOff = ifdOff + ifdSize;
+  const dataOff = bpsOff + 6;
+  const pixels = w * h * 3;
+  const out = new Uint8Array(dataOff + pixels);
+  const dv = new DataView(out.buffer);
+  out[0] = 0x49; out[1] = 0x49;
+  dv.setUint16(2, 42, true);
+  dv.setUint32(4, ifdOff, true);
+  dv.setUint16(ifdOff, n, true);
+  const SHORT = 3, LONG = 4;
+  const entries = [
+    [256, LONG, w], [257, LONG, h], [258, SHORT, bpsOff, 3], [259, SHORT, 1], [262, SHORT, 2],
+    [273, LONG, dataOff], [277, SHORT, 3], [278, LONG, h], [279, LONG, pixels], [284, SHORT, 1],
+  ];
+  entries.forEach(([tag, type, value, count = 1], i) => {
+    const o = ifdOff + 2 + i * 12;
+    dv.setUint16(o, tag, true);
+    dv.setUint16(o + 2, type, true);
+    dv.setUint32(o + 4, count, true);
+    if (type === SHORT && count === 1) dv.setUint16(o + 8, value, true);
+    else dv.setUint32(o + 8, value, true);
+  });
+  dv.setUint32(ifdOff + 2 + n * 12, 0, true); // পরের IFD নেই
+  dv.setUint16(bpsOff, 8, true); dv.setUint16(bpsOff + 2, 8, true); dv.setUint16(bpsOff + 4, 8, true);
+  let o = dataOff;
+  for (let s = 0; s < px.length; s += 4) {
+    out[o++] = px[s]; out[o++] = px[s + 1]; out[o++] = px[s + 2];
+  }
+  return out;
+}
+
+// ---------- ICO (ভেতরে PNG, একটি ২৫৬×২৫৬ এন্ট্রি) ----------
+function encodeIco(pngBytes) {
+  const out = new Uint8Array(22 + pngBytes.length);
+  const dv = new DataView(out.buffer);
+  dv.setUint16(2, 1, true);   // type = icon
+  dv.setUint16(4, 1, true);   // ১টি ছবি
+  out[6] = 0; out[7] = 0;     // ০ মানে ২৫৬
+  dv.setUint16(10, 1, true);  // planes
+  dv.setUint16(12, 32, true); // bits
+  dv.setUint32(14, pngBytes.length, true);
+  dv.setUint32(18, 22, true);
+  out.set(pngBytes, 22);
+  return out;
+}
+
+// ---------- PDF (A4 পেজে ছবি, ভেতরে JPEG) ----------
+function encodePdfFromJpeg(jpeg, wpx, hpx) {
+  const te = new TextEncoder();
+  let pw = 595.28, ph = 841.89;
+  if (wpx > hpx) [pw, ph] = [ph, pw];
+  const margin = 20;
+  const s = Math.min((pw - 2 * margin) / wpx, (ph - 2 * margin) / hpx);
+  const dw = wpx * s, dh = hpx * s;
+  const x = (pw - dw) / 2, y = (ph - dh) / 2;
+  const content = `q ${dw.toFixed(2)} 0 0 ${dh.toFixed(2)} ${x.toFixed(2)} ${y.toFixed(2)} cm /Im0 Do Q`;
+
+  const chunks = [];
+  const offs = [];
+  let len = 0;
+  const push = (b) => { const u = typeof b === "string" ? te.encode(b) : b; chunks.push(u); len += u.length; };
+  const obj = (n, fn) => { offs[n] = len; push(`${n} 0 obj\n`); fn(); push("endobj\n"); };
+
+  push("%PDF-1.4\n");
+  push(new Uint8Array([0x25, 0xe2, 0xe3, 0xcf, 0xd3, 0x0a]));
+  obj(1, () => push("<< /Type /Catalog /Pages 2 0 R >>\n"));
+  obj(2, () => push("<< /Type /Pages /Kids [3 0 R] /Count 1 >>\n"));
+  obj(3, () => push(`<< /Type /Page /Parent 2 0 R /MediaBox [0 0 ${pw.toFixed(2)} ${ph.toFixed(2)}] /Resources << /XObject << /Im0 4 0 R >> >> /Contents 5 0 R >>\n`));
+  obj(4, () => {
+    push(`<< /Type /XObject /Subtype /Image /Width ${wpx} /Height ${hpx} /ColorSpace /DeviceRGB /BitsPerComponent 8 /Filter /DCTDecode /Length ${jpeg.length} >>\nstream\n`);
+    push(jpeg);
+    push("\nendstream\n");
+  });
+  obj(5, () => push(`<< /Length ${content.length} >>\nstream\n${content}\nendstream\n`));
+
+  const xref = len;
+  let table = "xref\n0 6\n0000000000 65535 f \n";
+  for (let i = 1; i <= 5; i++) table += `${String(offs[i]).padStart(10, "0")} 00000 n \n`;
+  push(table);
+  push(`trailer\n<< /Size 6 /Root 1 0 R >>\nstartxref\n${xref}\n%%EOF\n`);
+
+  const out = new Uint8Array(len);
+  let p = 0;
+  for (const c of chunks) { out.set(c, p); p += c.length; }
+  return out;
+}
+
+// মূল রূপান্তর: bytes → নতুন ফরম্যাটের bytes
+async function convertImage(bytes, target, quality) {
+  const f = IMG_FORMATS[target];
+  if (!f) throw new Error("অজানা ফরম্যাট");
+  const src = await decodeImage(bytes);
+  try {
+    const { w, h } = srcSize(src);
+    if (!w || !h) throw new Error("ছবির মাপ পাওয়া যায়নি");
+    if (w * h > MAX_CONVERT_PIXELS) throw new Error(`ছবি খুব বড় (${w}×${h})`);
+
+    if (target === "ico") {
+      const c = makeCanvas(256, 256); // স্বচ্ছ, ছবি মাঝখানে
+      const s = Math.min(256 / w, 256 / h);
+      const dw = Math.round(w * s), dh = Math.round(h * s);
+      c.getContext("2d").drawImage(src, (256 - dw) / 2, (256 - dh) / 2, dw, dh);
+      return encodeIco(await blobBytes(await canvasBlob(c, "image/png")));
+    }
+
+    const canvas = makeCanvas(w, h);
+    const ctx = canvas.getContext("2d");
+    // JPG/BMP/TIFF/PDF-এ স্বচ্ছতা নেই; সাদা পটভূমি না দিলে কালো হয়ে যায়
+    if (!["png", "webp"].includes(target)) {
+      ctx.fillStyle = "#ffffff";
+      ctx.fillRect(0, 0, w, h);
+    }
+    ctx.drawImage(src, 0, 0);
+
+    if (target === "png") return blobBytes(await canvasBlob(canvas, "image/png"));
+    if (target === "jpg") return blobBytes(await canvasBlob(canvas, "image/jpeg", quality));
+    if (target === "webp") {
+      const b = await canvasBlob(canvas, "image/webp", quality);
+      if (b.type !== "image/webp") throw new Error("এই ডিভাইসে WebP তৈরি হয় না");
+      return blobBytes(b);
+    }
+    if (target === "bmp") return encodeBmp(canvas);
+    if (target === "tiff") return encodeTiff(canvas);
+    if (target === "pdf") {
+      const jpeg = await blobBytes(await canvasBlob(canvas, "image/jpeg", quality));
+      return encodePdfFromJpeg(jpeg, w, h);
+    }
+    throw new Error("অজানা ফরম্যাট");
+  } finally {
+    if (src && typeof src.close === "function") src.close();
+  }
+}
+
+// ---- ছবি বোতামের মোড ও রূপান্তরের সেটিংস ----
+const imgModeEl = document.querySelector("#img-mode");
+const imgTargetEl = document.querySelector("#img-target");
+const imgQualityEl = document.querySelector("#img-quality");
+
+for (const [id, f] of Object.entries(IMG_FORMATS)) {
+  const o = document.createElement("option");
+  o.value = id;
+  o.textContent = f.label;
+  imgTargetEl.appendChild(o);
+}
+
+function prefGet(key, fallback, allowed) {
+  try {
+    const v = localStorage.getItem(key);
+    if (v !== null && allowed.includes(v)) return v;
+  } catch (_) {}
+  return fallback;
+}
+imgModeEl.value = prefGet("aqis_img_mode", "ocr", ["ocr", "convert"]);
+imgTargetEl.value = prefGet("aqis_img_target", "png", Object.keys(IMG_FORMATS));
+imgQualityEl.value = prefGet("aqis_img_quality", "0.92", ["1", "0.92", "0.8", "0.6"]);
+
+function applyImgMode() {
+  const convert = imgModeEl.value === "convert";
+  document.querySelector("#convert-opts").style.display = convert ? "flex" : "none";
+  document.querySelector("#quality-wrap").style.display = IMG_FORMATS[imgTargetEl.value].quality ? "block" : "none";
+  btnImg.textContent = convert ? "ছবি → ছবি" : "ছবি → টেক্সট";
+  try {
+    localStorage.setItem("aqis_img_mode", imgModeEl.value);
+    localStorage.setItem("aqis_img_target", imgTargetEl.value);
+    localStorage.setItem("aqis_img_quality", imgQualityEl.value);
+  } catch (_) {}
+}
+for (const el of [imgModeEl, imgTargetEl, imgQualityEl]) el.addEventListener("change", applyImgMode);
+applyImgMode();
+
+// ছবি → ছবি: একটার পর একটা রূপান্তর, প্রতিটির ফল সাথে সাথে সেভ
+async function convertImages() {
+  try {
+    const selected = await open({
+      multiple: true,
+      filters: [{ name: "Images", extensions: ["png", "jpg", "jpeg", "webp", "bmp", "gif", "ico", "avif"] }],
+    });
+    if (!selected || selected.length === 0) return;
+
+    const folder = await pickFolder();
+    if (!folder) return;
+
+    setBusy(true);
+    const target = imgTargetEl.value;
+    const f = IMG_FORMATS[target];
+    const quality = parseFloat(imgQualityEl.value) || 0.92;
+    statusEl.textContent = `ছবি রূপান্তর শুরু (${f.ext.toUpperCase()})...`;
+    progressBox.style.display = "none";
+
+    const total = selected.length;
+    let ok = 0;
+    for (let i = 0; i < total; i++) {
+      const imgPath = selected[i];
+      const outName = `${baseNameOf(imgPath, `image_${i + 1}`)}.${f.ext}`;
+      try {
+        setProgress("ছবি", i, total, 0, "ছবি পড়া হচ্ছে...");
+        const bytes = await readFile(imgPath);
+
+        setProgress("ছবি", i, total, 0.3, "রূপান্তর হচ্ছে...");
+        const out = await convertImage(bytes, target, quality);
+
+        setProgress("ছবি", i, total, 0.8, "সেভ হচ্ছে...");
+        await writeFile(folder.id, outName, out, { mimeType: f.mime });
+        log(`✔ ${i + 1}/${total} সেভ: ${outName}`);
+        ok++;
+      } catch (err) {
+        // একটি ছবি ব্যর্থ হলে বাকিগুলো চলবে
+        log(`❌ ${i + 1}/${total} ${displayName(imgPath)}: ${err}`);
+      }
+      setProgress("ছবি", i + 1, total, 0, `${i + 1} ছবি সম্পন্ন`);
+    }
+    finishProgress("ছবি", total);
+    log(`🎉 সম্পন্ন! ${ok}/${total} ছবি রূপান্তর হয়েছে।`);
+    if (ok > 0) showInterstitialIfDue();
+  } catch (err) {
+    log(`❌ ${err}`);
+    console.error(err);
+  } finally {
+    setBusy(false);
+  }
+}
+
 btnImg.addEventListener("click", async () => {
+  if (imgModeEl.value === "convert") { await convertImages(); return; }
   let worker = null;
   try {
     const selected = await open({
