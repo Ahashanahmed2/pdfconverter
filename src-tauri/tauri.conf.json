@@ -1,6 +1,6 @@
 {
   "productName": "PDF Image Converter",
-  "version": "1.0.0",
+  "version": "2.0.0",
   "identifier": "com.aqis.ocr",
   "build": {
     "beforeBuildCommand": "npm run build",
