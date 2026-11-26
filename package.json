@@ -1,6 +1,6 @@
 {
   "name": "pdfconverter",
-  "version": "2.0.1",
+  "version": "2.0.2",
   "description": "pdf and image OCR Converter",
   "type": "module",
   "scripts": {
