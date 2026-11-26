@@ -82,6 +82,25 @@ jobs:
           cat package.json | grep -A3 '"scripts"'
 
       # ==========================================
+      # 8.5 Verify Kotlin plugin sources exist
+      #     (UpdaterPlugin.kt না থাকলে অ্যাপ চালুতেই ক্র্যাশ করে)
+      # ==========================================
+      - name: Verify Kotlin plugin sources
+        run: |
+          set -e
+          SRC=src-tauri/android-src
+          for f in UpdaterPlugin.kt AdsPlugin.kt UpdateFileProvider.kt update_file_paths.xml; do
+            test -f "$SRC/$f" || { echo "ERROR: $SRC/$f missing"; exit 1; }
+          done
+          # দুই ফাইলে একই ক্লাস থাকলে Kotlin "Redeclaration" error দেয়
+          if grep -q "class DownloadArgs" "$SRC/UpdaterPlugin.kt" && grep -q "class DownloadArgs" "$SRC/AdsPlugin.kt"; then
+            echo "ERROR: DownloadArgs is declared in both UpdaterPlugin.kt and AdsPlugin.kt."
+            echo "Remove DownloadArgs and the update_* commands from AdsPlugin.kt."
+            exit 1
+          fi
+          echo "Kotlin sources OK"
+
+      # ==========================================
       # 9. Decode and Verify Keystore
       # ==========================================
       - name: Decode and Verify Keystore
@@ -166,7 +185,11 @@ jobs:
           echo "Android package: $PKG"
           test "$PKG" = "com.aqis.ocr" || { echo "ERROR: package is $PKG, expected com.aqis.ocr"; exit 1; }
 
+          # lib.rs অ্যাপ চালুতেই "UpdaterPlugin" রেজিস্টার করে — এটা না থাকলে অ্যাপ ক্র্যাশ করে
+          cp src-tauri/android-src/UpdaterPlugin.kt "$KT_DIR/"
           cp src-tauri/android-src/UpdateFileProvider.kt "$KT_DIR/"
+          test -f "$KT_DIR/UpdaterPlugin.kt" || { echo "ERROR: UpdaterPlugin.kt not copied"; exit 1; }
+
           mkdir -p $APP/src/main/res/xml
           cp src-tauri/android-src/update_file_paths.xml $APP/src/main/res/xml/
 
@@ -256,6 +279,8 @@ jobs:
           echo "=== Verify AdMob patch ==="
           grep -n "play-services-ads\|user-messaging" "$GRADLE" || { echo "ERROR: ads dependency missing"; exit 1; }
           grep -n "APPLICATION_ID\|AD_ID" $APP/src/main/AndroidManifest.xml || { echo "ERROR: manifest patch failed"; exit 1; }
+          echo "--- Kotlin plugins installed ---"
+          ls -la "$KT_DIR"
 
       # ==========================================
       # 10.8 App icon + app name
