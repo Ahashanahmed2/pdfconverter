@@ -1,7 +1,7 @@
 {
   "name": "pdfconverter",
   "version": "2.0.0",
-  "description": "AQIS OCR PDF Converter",
+  "description": "pdf and image OCR Converter",
   "type": "module",
   "scripts": {
     "dev": "vite",
